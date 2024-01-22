@@ -3,9 +3,8 @@ package worker;
 import utils.JsonUtils;
 
 import java.io.*;
-import java.lang.reflect.Type;
 
-public class workerMain {
+public class WorkerMain {
 
     enum Sentiment{
         VeryNegative,
@@ -33,7 +32,7 @@ public class workerMain {
 
     public static void main(String[] args){
 
-        File file = new File("C:\\Users\\Yuval\\git\\Distributed_Systems_Assignment1\\AWS_sarcasm\\src\\main\\java\\worker\\input1.txt");
+        File file = new File(args[0]);
         try (BufferedReader reader = new BufferedReader(new FileReader(file))){
             String s = "";
             while((s = reader.readLine()) != null){
