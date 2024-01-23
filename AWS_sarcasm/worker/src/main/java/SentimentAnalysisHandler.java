@@ -1,13 +1,7 @@
-package worker;
 
-import java.util.List;
+
 import java.util.Properties;
 import edu.stanford.nlp.ling.CoreAnnotations;
-import edu.stanford.nlp.ling.CoreAnnotations.NamedEntityTagAnnotation;
-import edu.stanford.nlp.ling.CoreAnnotations.SentencesAnnotation;
-import edu.stanford.nlp.ling.CoreAnnotations.TextAnnotation;
-import edu.stanford.nlp.ling.CoreAnnotations.TokensAnnotation;
-import edu.stanford.nlp.ling.CoreLabel;
 import edu.stanford.nlp.neural.rnn.RNNCoreAnnotations;
 import edu.stanford.nlp.pipeline.Annotation;
 import edu.stanford.nlp.pipeline.StanfordCoreNLP;
@@ -15,19 +9,19 @@ import edu.stanford.nlp.sentiment.SentimentCoreAnnotations;
 import edu.stanford.nlp.trees.Tree;
 import edu.stanford.nlp.util.CoreMap;
 
+public class SentimentAnalysisHandler {
 
+    private static SentimentAnalysisHandler instance;
 
-public class sentimentAnalysisHandler {
+    private StanfordCoreNLP sentimentPipeline;
 
-    private static StanfordCoreNLP sentimentPipeline;
-
-    public sentimentAnalysisHandler() {
+    public SentimentAnalysisHandler() {
         Properties props = new Properties();
         props.put("annotators", "tokenize, ssplit, parse, sentiment");
         sentimentPipeline = new StanfordCoreNLP(props);
     }
 
-    public static int findSentiment(String review) {
+    public int findSentiment(String review) {
         int mainSentiment = 0;
         if (review!= null && review.length() > 0) {
             int longest = 0;
@@ -47,5 +41,11 @@ public class sentimentAnalysisHandler {
         return mainSentiment;
     }
 
+    public static SentimentAnalysisHandler getInstance(){
+        if (instance == null){
+            instance = new SentimentAnalysisHandler();
+        }
+        return instance;
+    }
 
 }

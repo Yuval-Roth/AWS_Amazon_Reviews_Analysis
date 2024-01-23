@@ -1,6 +1,3 @@
-package worker;
-
-import utils.JsonUtils;
 
 import java.io.*;
 
@@ -26,8 +23,8 @@ public class WorkerMain {
     }
 
 
-    static sentimentAnalysisHandler sentimentAnalysisHandler = new sentimentAnalysisHandler();
-    static namedEntityRecognitionHandler namedEntityRecognitionHandler = new namedEntityRecognitionHandler();
+    static SentimentAnalysisHandler sentimentAnalysisHandler = SentimentAnalysisHandler.getInstance();
+    static NamedEntityRecognitionHandler namedEntityRecognitionHandler = NamedEntityRecognitionHandler.getInstance();
 
 
     public static void main(String[] args){
@@ -39,13 +36,12 @@ public class WorkerMain {
                 TitleReviews tr = JsonUtils.deserialize(s,TitleReviews.class);
                 System.out.println(tr.title());
                 for(Review r : tr.reviews()){
-                    int sentiment = worker.sentimentAnalysisHandler.findSentiment(r.text());
+                    int sentiment = sentimentAnalysisHandler.findSentiment(r.text());
                     System.out.println(r);
                     System.out.println(Sentiment.ofIndex(sentiment));
-                    worker.namedEntityRecognitionHandler.printEntities(r.text());
+                    namedEntityRecognitionHandler.printEntities(r.text());
                 }
             }
-
 
         } catch (IOException e) {
             throw new RuntimeException(e);

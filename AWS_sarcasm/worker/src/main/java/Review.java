@@ -1,4 +1,3 @@
-package worker;
 
 public record Review (String id, String link, String title, String text, int rating, String author, String date) {
 

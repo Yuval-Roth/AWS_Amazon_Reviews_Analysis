@@ -1,8 +1,7 @@
-package worker;
 
 import java.util.List;
 import java.util.Properties;
-import edu.stanford.nlp.ling.CoreAnnotations;
+
 import edu.stanford.nlp.ling.CoreAnnotations.NamedEntityTagAnnotation;
 import edu.stanford.nlp.ling.CoreAnnotations.SentencesAnnotation;
 import edu.stanford.nlp.ling.CoreAnnotations.TextAnnotation;
@@ -10,25 +9,21 @@ import edu.stanford.nlp.ling.CoreAnnotations.TokensAnnotation;
 import edu.stanford.nlp.ling.CoreLabel;
 import edu.stanford.nlp.pipeline.Annotation;
 import edu.stanford.nlp.pipeline.StanfordCoreNLP;
-import edu.stanford.nlp.sentiment.SentimentCoreAnnotations;
-import edu.stanford.nlp.trees.Tree;
 import edu.stanford.nlp.util.CoreMap;
 
+public class NamedEntityRecognitionHandler {
 
-import java.util.List;
-import java.util.Properties;
+    private static NamedEntityRecognitionHandler instance;
 
-public class namedEntityRecognitionHandler {
+    private StanfordCoreNLP nerPipeline;
 
-    private static StanfordCoreNLP nerPipeline;
-
-    public namedEntityRecognitionHandler() {
+    private NamedEntityRecognitionHandler() {
         Properties props = new Properties();
         props.put("annotators", "tokenize , ssplit, pos, lemma, ner");
         nerPipeline = new StanfordCoreNLP(props);
     }
 
-    public static void printEntities(String review){
+    public void printEntities(String review){
         // create an empty Annotation just with the given text
         Annotation document = new Annotation(review);
         // run all Annotators on this text
@@ -48,6 +43,13 @@ public class namedEntityRecognitionHandler {
                 System.out.println("\t-" + word + ":" + ne);
             }
         }
+    }
+
+    public static NamedEntityRecognitionHandler getInstance(){
+        if (instance == null){
+            instance = new NamedEntityRecognitionHandler();
+        }
+        return instance;
     }
 
 }
