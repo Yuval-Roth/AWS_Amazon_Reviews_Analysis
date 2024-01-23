@@ -1,5 +1,7 @@
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 
 import edu.stanford.nlp.ling.CoreAnnotations.NamedEntityTagAnnotation;
@@ -23,7 +25,10 @@ public class NamedEntityRecognitionHandler {
         nerPipeline = new StanfordCoreNLP(props);
     }
 
-    public void printEntities(String review){
+    public Map<String,String> printEntities(String review){
+
+        Map<String,String> entities = new HashMap<>();
+
         // create an empty Annotation just with the given text
         Annotation document = new Annotation(review);
         // run all Annotators on this text
@@ -40,9 +45,11 @@ public class NamedEntityRecognitionHandler {
                 String word = token.get(TextAnnotation.class);
                 // this is the NER label of the token
                 String ne = token.get(NamedEntityTagAnnotation.class);
-                System.out.println("\t-" + word + ":" + ne);
+                entities.put(word,ne);
+//                System.out.println("\t-" + word + ":" + ne);
             }
         }
+        return entities;
     }
 
     public static NamedEntityRecognitionHandler getInstance(){
