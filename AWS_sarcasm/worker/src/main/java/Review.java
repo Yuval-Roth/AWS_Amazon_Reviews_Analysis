@@ -1,5 +1,6 @@
 
-public record Review (String id, String link, String title, String text, int rating, String author, String date) {
+public record Review (String id, String link, String title, String text, int rating, String author, String date,
+                      WorkerMain.Sentiment sentiment) {
 
     @Override
     public String toString() {
@@ -12,6 +13,8 @@ public record Review (String id, String link, String title, String text, int rat
                     rating: %d
                     author: %s
                     date: %s
+                    sentiment: %s
+                    
                 }""".formatted(id,link,title,text,rating,author,date);
     }
 }
