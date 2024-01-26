@@ -1,4 +1,3 @@
 
 
-public record TitleReviews(String title, Review[] reviews) {
-}
+public record TitleReviews(String title, Review[] reviews) { }

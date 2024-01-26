@@ -25,7 +25,7 @@ public class NamedEntityRecognitionHandler {
         nerPipeline = new StanfordCoreNLP(props);
     }
 
-    public Map<String,String> printEntities(String review){
+    public Map<String,String> findEntities(String review){
 
         Map<String,String> entities = new HashMap<>();
 
@@ -46,7 +46,6 @@ public class NamedEntityRecognitionHandler {
                 // this is the NER label of the token
                 String ne = token.get(NamedEntityTagAnnotation.class);
                 entities.put(word,ne);
-//                System.out.println("\t-" + word + ":" + ne);
             }
         }
         return entities;
