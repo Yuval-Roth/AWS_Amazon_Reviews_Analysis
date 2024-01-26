@@ -91,7 +91,7 @@ public class WorkerMain {
         if(job.action() == Job.Action.PROCESS){
 
             // Deserialize reviews
-            TitleReviews tr = JsonUtils.deserialize(message,TitleReviews.class);
+            TitleReviews tr = JsonUtils.deserialize(job.input(),TitleReviews.class);
 
             // Process reviews
             for(Review r : tr.reviews()){
