@@ -1,0 +1,8 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="EVSetter:jar">
+    <output-path>$PROJECT_DIR$/out/artifacts/EVSetter_jar</output-path>
+    <root id="archive" name="EVSetter.jar">
+      <element id="module-output" name="EVSetter" />
+    </root>
+  </artifact>
+</component>

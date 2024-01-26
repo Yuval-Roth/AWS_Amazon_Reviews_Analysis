@@ -1,0 +1,1 @@
+jpackage --name "EVSetter" --main-jar "EVSetter.jar" --input EVSetter_jar/. --dest "C:\Users\Yuval\git\Environment_variables_setter\out\artifacts"  --type app-image --win-console --app-version 1.0 --copyright "Yuval Roth" --vendor "Yuval Roth" --add-modules java.base,java.desktop
