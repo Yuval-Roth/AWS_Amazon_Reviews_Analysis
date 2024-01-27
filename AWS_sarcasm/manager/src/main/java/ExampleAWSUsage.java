@@ -1,9 +1,9 @@
 
+import software.amazon.awssdk.identity.spi.internal.DefaultAwsCredentialsIdentity;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.ec2.Ec2Client;
-import software.amazon.awssdk.services.ec2.model.IamInstanceProfileSpecification;
-import software.amazon.awssdk.services.ec2.model.RunInstancesRequest;
-import software.amazon.awssdk.services.ec2.model.ShutdownBehavior;
+import software.amazon.awssdk.services.ec2.model.*;
+import software.amazon.awssdk.services.ec2.model.Tag;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.*;
 import software.amazon.awssdk.services.sqs.SqsClient;
@@ -110,6 +110,10 @@ public class ExampleAWSUsage {
 
         RunInstancesRequest runRequest = RunInstancesRequest.builder()
                 .imageId(IMAGE_ID)
+                .tagSpecifications(TagSpecification.builder()
+                        .resourceType(ResourceType.INSTANCE)
+                        .tags(Tag.builder().key("Name").value("WorkerInstance").build())
+                        .build())
                 .securityGroupIds(SECURITY_GROUP)
                 .instanceType(INSTANCE_TYPE)
                 .iamInstanceProfile(IamInstanceProfileSpecification.builder()
@@ -120,8 +124,26 @@ public class ExampleAWSUsage {
                 .minCount(1)
                 .userData(Base64.getEncoder().encodeToString(getUserDataScript().getBytes()))
                 .build();
+        ec2.runInstances(runRequest);
 
-//        ec2.runInstances(runRequest);
+        DescribeInstancesRequest describeInstancesRequest = DescribeInstancesRequest.builder()
+                .filters(Filter.builder()
+                        .name("tag:Name")
+                        .values("WorkerInstance")
+                        .build(),
+                        Filter.builder()
+                                .name("instance-state-name")
+                                .values("running", "pending")
+                                .build())
+                .build();
+
+        var r = ec2.describeInstances(describeInstancesRequest);
+        for (var reservation : r.reservations()) {
+            for (var instance : reservation.instances()) {
+                System.out.println(instance.instanceId());
+            }
+        }
+
     }
 
     private static void tMain(String queueName) {
