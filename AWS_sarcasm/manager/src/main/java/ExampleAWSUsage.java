@@ -125,11 +125,13 @@ public class ExampleAWSUsage {
     }
 
     private static void tMain(String queueName) {
+        ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
+                .maxNumberOfMessages(1)
+                .queueUrl(SQS_DOMAIN_PREFIX + queueName + ".fifo")
+                .build();
+
         while(shouldRun) {
-            var r =  sqs.receiveMessage(ReceiveMessageRequest.builder()
-                    .maxNumberOfMessages(1)
-                    .queueUrl(SQS_DOMAIN_PREFIX + queueName + ".fifo")
-                    .build());
+            var r =  sqs.receiveMessage(messageRequest);
             if(r.hasMessages()){
 
                 System.out.println(Thread.currentThread().getName()+": "+r.messages().getFirst().body());
