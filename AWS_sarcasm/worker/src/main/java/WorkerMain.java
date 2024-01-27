@@ -3,7 +3,6 @@ import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
 import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
-import software.amazon.awssdk.services.sqs.model.SendMessageResponse;
 
 import java.util.Map;
 import java.util.Random;
@@ -70,6 +69,8 @@ public class WorkerMain {
                 .queueUrl(IN_QUEUE_URL)
                 .build();
 
+        Random rand = new Random();
+
         // Main loop
         while(isRunning.get()){
 
@@ -87,14 +88,25 @@ public class WorkerMain {
                 // Deserialize job
                 Job job = JsonUtils.deserialize(request.messages().getFirst().body(),Job.class);
 
-                if(job.action() == Job.Action.SHUTDOWN){
-                    isRunning.set(false);
-                    sqsLock.release();
+                switch(job.action()){
+                    case PROCESS -> {
+                        sqsLock.release();
 
-                } else if(job.action() == Job.Action.PROCESS){
-                    sqsLock.release();
-                    // Process message and then delete from in queue
-                    processMessage(job.input());
+                        // Process message and send to out queue
+                        String output = processMessage(job.input());
+                        String deDupeId = "%s-%s-%s".formatted(MESSAGE_DEDUPLICATION_ID, Thread.currentThread().getName(), rand.nextInt());
+                        sqs.sendMessage(SendMessageRequest.builder()
+                                .queueUrl(OUT_QUEUE_URL)
+                                .messageBody(output)
+                                .messageGroupId(MESSAGE_GROUP_ID)
+                                .messageDeduplicationId(deDupeId)
+                                .build());
+                    }
+                    case SHUTDOWN -> {
+                        isRunning.set(false);
+                        sqsLock.release();
+                    }
+                    case NONE -> sqsLock.release(); // mostly for debugging purposes
                 }
 
                 // Delete message from in queue
@@ -103,9 +115,8 @@ public class WorkerMain {
                         .receiptHandle(request.messages().getFirst().receiptHandle())
                         .build());
 
-            } else {
+            } else { // No messages
                 sqsLock.release();
-                // Sleep for 1 second if no messages
                 try {
                     Thread.sleep(1000);
                 } catch (InterruptedException e) {
@@ -115,9 +126,7 @@ public class WorkerMain {
         }
     }
 
-    private static void processMessage(String input) {
-
-        Random rand = new Random();
+    private static String processMessage(String input) {
 
         // Deserialize reviews
         TitleReviews tr = JsonUtils.deserialize(input,TitleReviews.class);
@@ -137,14 +146,7 @@ public class WorkerMain {
             r.setSentiment(Review.Sentiment.values()[sentiment]);
         }
 
-        // Serialize reviews and send to out queue
-        String outMessage = JsonUtils.serialize(tr);
-        String deDupeId = "%s-%s-%s".formatted(MESSAGE_DEDUPLICATION_ID, Thread.currentThread().getName(), rand.nextInt());
-        sqs.sendMessage(SendMessageRequest.builder()
-                .queueUrl(OUT_QUEUE_URL)
-                .messageBody(outMessage)
-                .messageGroupId(MESSAGE_GROUP_ID)
-                .messageDeduplicationId(deDupeId)
-                .build());
+        // Serialize reviews and return
+        return JsonUtils.serialize(tr);
     }
 }
