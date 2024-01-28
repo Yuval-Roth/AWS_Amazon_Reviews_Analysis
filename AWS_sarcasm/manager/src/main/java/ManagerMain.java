@@ -12,16 +12,13 @@ import software.amazon.awssdk.services.sqs.model.QueueAttributeName;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
 import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
 
-import java.util.Base64;
-import java.util.HashMap;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Random;
+import java.util.*;
 
 public class ManagerMain {
 
     // <S3>
     public static final String BUCKET_NAME = "distributed-systems-2024-bucket-yuval-adi";
+    private static final int TR_JOB_SPLIT_SIZE = 5;
     private static S3Client s3;
     // </S3>
 
@@ -43,12 +40,15 @@ public class ManagerMain {
     private static final String USER_INPUT_QUEUE_NAME = "userInputQueue";
     private static final String USER_OUTPUT_QUEUE_NAME = "userOutputQueue";
     private static final String SQS_DOMAIN_PREFIX = "https://sqs.us-east-1.amazonaws.com/057325794177/";
+    private static final int MAX_WORKERS = 18;
     private static SqsClient sqs;
     // </SQS>
 
     private static final Region ec2_region = Region.US_EAST_1;
     private static final Region s3_region = Region.US_WEST_2;
-    private static int jobIdCounter = 0 ;
+    private static int jobIdCounter;
+    private static Map<Integer,ClientRequest> clientRequestIdToClientRequest;
+    private static Map<Integer, Integer> jobIdToClientRequestId;
 
     public static void main(String[] args) {
 
@@ -64,30 +64,66 @@ public class ManagerMain {
                 .region(ec2_region)
                 .build();
 
-
-
+        jobIdToClientRequestId = new HashMap<>();
+        clientRequestIdToClientRequest = new HashMap<>();
+        jobIdCounter = 0;
 
     }
 
-    private static void tempMain() {
+    private static void checkForClientRequests() {
 
-        String queueName = "user-input";
         ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
                 .maxNumberOfMessages(1)
-                .queueUrl(SQS_DOMAIN_PREFIX + queueName + ".fifo")
+                .queueUrl(getQueueURL(USER_INPUT_QUEUE_NAME))
                 .build();
 
         var r = sqs.receiveMessage(messageRequest);
-        String message = r.messages().getFirst().body();
-        String[] messages = message.split("\n");
+        
+        if(r.hasMessages()){
+
+            // read message and create client request
+            String message = r.messages().getFirst().body();
+            ClientRequest clientRequest = JsonUtils.deserialize(message, ClientRequest.class);
+            clientRequestIdToClientRequest.put(clientRequest.requestId(), clientRequest);
+
+
+            String[] jsons = clientRequest.input().split("\n");
+            TitleReviews[] titleReviewsList =  Arrays.stream(jsons)
+                    .map(json -> JsonUtils.<TitleReviews>deserialize(json, TitleReviews.class))
+                    .toArray(TitleReviews[]::new);
+
+            // split client request to jobs and send to workers
+            List<TitleReviews> smallTitleReviewsList = splitTitleReviews(titleReviewsList, TR_JOB_SPLIT_SIZE);
+            Random rand = new Random();
+            for (TitleReviews tr : smallTitleReviewsList) {
+                String jsonJob = JsonUtils.serialize(tr);
+                Job job = new Job(jobIdCounter, Job.Action.PROCESS, jsonJob);
+                jobIdToClientRequestId.put(jobIdCounter,clientRequest.requestId());
+                String messageBody = JsonUtils.serialize(job);
+                sendToQueue(WORKER_IN_QUEUE_NAME, messageBody, rand.nextInt());
+                jobIdCounter++;
+            }
+        }
+
+    }
+
+    private static void sendToQueue(String queueName, String messageBody, int deDupeId) {
+        sqs.sendMessage(SendMessageRequest.builder()
+                .queueUrl(getQueueURL(queueName))
+                .messageBody(messageBody)
+                .messageGroupId("1")
+                .messageDeduplicationId(String.valueOf(deDupeId))
+                .build());
+    }
+
+    private static List<TitleReviews> splitTitleReviews(TitleReviews[] bigTitleReviews,int splitSize) {
         List<TitleReviews> smallTitleReviewsList = new LinkedList<>(); //will hold all title Reviews with 5 reviews
-        for (String json : messages) {
+        for (TitleReviews tr : bigTitleReviews) {
             int counterReviews = 0;
-            TitleReviews tr = JsonUtils.deserialize(json, TitleReviews.class);
             List<Review> fiveReviews = new LinkedList<>();
             TitleReviews smallTr = new TitleReviews(tr.title(), fiveReviews);
             for (Review rev : tr.reviews()) {
-                if (counterReviews < 5) {
+                if (counterReviews < splitSize) {
                     fiveReviews.add(rev);
                     counterReviews++;
                 } else { //counterReview == 5
@@ -98,18 +134,7 @@ public class ManagerMain {
                 }
             }
         }
-        for (TitleReviews tr : smallTitleReviewsList) {
-            String jsonJob = JsonUtils.serialize(tr);
-            Job job = new Job(jobIdCounter, Job.Action.PROCESS, jsonJob);
-            String messageBody = JsonUtils.serialize(job);
-            sqs.sendMessage(SendMessageRequest.builder()
-                    .queueUrl(SQS_DOMAIN_PREFIX + queueName + ".fifo")
-                    .messageBody(messageBody)
-                    .messageGroupId("1")
-                    .messageDeduplicationId(String.valueOf(new Random().nextInt()))
-                    .build());
-            jobIdCounter++;
-        }
+        return smallTitleReviewsList;
     }
 
     private static void startWorkers(int count) {
