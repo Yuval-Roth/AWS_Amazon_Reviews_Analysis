@@ -4,10 +4,12 @@ import software.amazon.awssdk.services.ec2.Ec2Client;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
+import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
 
 import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Random;
 
 public class ManagerMain {
     private static final String SQS_DOMAIN_PREFIX = "https://sqs.us-east-1.amazonaws.com/057325794177/";
@@ -32,20 +34,20 @@ public class ManagerMain {
         String message = r.messages().getFirst().body();
         String[] messages = message.split("\n");
         List<TitleReviews> titleReviewsList = new LinkedList<>(); //will hold all title Reviews with 5 reviews
-        int counterReviews = 0;
         int reviewsSize = 5;
         for (String json : messages) {
+            int counterReviews = 0;
             TitleReviews tr = JsonUtils.deserialize(json, TitleReviews.class);
-            Review[] fiveReviews = new Review[reviewsSize];
+            LinkedList<Review> fiveReviews = new LinkedList<>();
             TitleReviews smallTr = new TitleReviews(tr.title(),fiveReviews);
             for (Review rev: tr.reviews()) {
                 if(counterReviews<5){
-                    fiveReviews[counterReviews] = rev;
+                    fiveReviews.add(rev);
                     counterReviews++;
                 }
                 else{ //counterReview == 5
                     titleReviewsList.add(smallTr);
-                    fiveReviews = new Review[reviewsSize];
+                    fiveReviews = new LinkedList<>();
                     smallTr = new TitleReviews(tr.title(),fiveReviews);
                     counterReviews=0;
                 }
