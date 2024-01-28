@@ -10,11 +10,13 @@ import software.amazon.awssdk.services.sqs.model.CreateQueueRequest;
 import software.amazon.awssdk.services.sqs.model.ListQueuesRequest;
 import software.amazon.awssdk.services.sqs.model.QueueAttributeName;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
+import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
 
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Random;
 
 public class ManagerMain {
     public static final String BUCKET_NAME = "distributed-systems-2024-bucket-yuval-adi";
@@ -35,7 +37,6 @@ public class ManagerMain {
     private static Ec2Client ec2;
     private static int workerCount;
     private static int workerId;
-    private static String
 
     public static void main(String[] args) {
 
@@ -65,14 +66,25 @@ public class ManagerMain {
         var r = sqs.receiveMessage(messageRequest);
         String message = r.messages().getFirst().body();
         String[] messages = message.split("\n");
+        List<TitleReviews> titleReviewsList = new LinkedList<>(); //will hold all title Reviews with 5 reviews
+        int reviewsSize = 5;
         for (String json : messages) {
             int counterReviews = 0;
-            List<TitleReviews> titleReviewsList = new LinkedList<>();
             TitleReviews tr = JsonUtils.deserialize(json, TitleReviews.class);
-//            for (:
-//                 ){
-//
-//            }
+            List<Review> fiveReviews = new LinkedList<>();
+            TitleReviews smallTr = new TitleReviews(tr.title(),fiveReviews);
+            for (Review rev: tr.reviews()) {
+                if(counterReviews<5){
+                    fiveReviews.add(rev);
+                    counterReviews++;
+                }
+                else{ //counterReview == 5
+                    titleReviewsList.add(smallTr);
+                    fiveReviews = new LinkedList<>();
+                    smallTr = new TitleReviews(tr.title(),fiveReviews);
+                    counterReviews=0;
+                }
+            }
         }
     }
 
@@ -111,7 +123,7 @@ public class ManagerMain {
                 mkdir /runtimedir
                 cd /runtimedir
                 aws s3 cp %s workerMain.jar > workerMain_download.log 2>&1
-                java -Xmx3500m -Xms3000m -jar workerMain.jar %s %s %s %s > output.log 2>&1
+                java -Xmx4500m -Xms3750m -jar workerMain.jar %s %s %s %s > output.log 2>&1
                 sudo shutdown -h now""".formatted(
                         workerJarUri,
                         getQueueURL(WORKER_IN_QUEUE_NAME),
