@@ -86,25 +86,48 @@ public class ManagerMain {
             ClientRequest clientRequest = JsonUtils.deserialize(message, ClientRequest.class);
             clientRequestIdToClientRequest.put(clientRequest.requestId(), clientRequest);
 
-
+            // Deserialize client request input and split to small TitleReviews
             String[] jsons = clientRequest.input().split("\n");
-            TitleReviews[] titleReviewsList =  Arrays.stream(jsons)
-                    .map(json -> JsonUtils.<TitleReviews>deserialize(json, TitleReviews.class))
+            TitleReviews[] titleReviewsList = Arrays.stream(jsons)
+  /*deserialize*/   .map(json -> JsonUtils.<TitleReviews>deserialize(json, TitleReviews.class))
+        /*split*/   .flatMap(tr -> splitTitleReviews(tr, TR_JOB_SPLIT_SIZE).stream())
                     .toArray(TitleReviews[]::new);
 
             // split client request to jobs and send to workers
-            List<TitleReviews> smallTitleReviewsList = splitTitleReviews(titleReviewsList, TR_JOB_SPLIT_SIZE);
             Random rand = new Random();
-            for (TitleReviews tr : smallTitleReviewsList) {
+            for (TitleReviews tr : titleReviewsList) {
+
+                // create job and increment job id
                 String jsonJob = JsonUtils.serialize(tr);
-                Job job = new Job(jobIdCounter, Job.Action.PROCESS, jsonJob);
-                jobIdToClientRequestId.put(jobIdCounter,clientRequest.requestId());
+                Job job = new Job(jobIdCounter++, Job.Action.PROCESS, jsonJob);
                 String messageBody = JsonUtils.serialize(job);
+
+                // map job id to client request id
+                jobIdToClientRequestId.put(job.jobId(),clientRequest.requestId());
+
+                // send job to worker
                 sendToQueue(WORKER_IN_QUEUE_NAME, messageBody, rand.nextInt());
-                jobIdCounter++;
             }
         }
+    }
 
+    private static List<TitleReviews> splitTitleReviews(TitleReviews tr,int splitSize) {
+        List<TitleReviews> smallTitleReviewsList = new LinkedList<>(); //will hold all title Reviews with 5 reviews
+        int counterReviews = 0;
+        List<Review> tempList = new LinkedList<>();
+        TitleReviews smallTr = new TitleReviews(tr.title(), tempList);
+        for (Review rev : tr.reviews()) {
+            if (counterReviews < splitSize) {
+                tempList.add(rev);
+                counterReviews++;
+            } else { //counterReview == splitSize
+                smallTitleReviewsList.add(smallTr);
+                tempList = new LinkedList<>();
+                smallTr = new TitleReviews(tr.title(), tempList);
+                counterReviews = 0;
+            }
+        }
+        return smallTitleReviewsList;
     }
 
     private static void sendToQueue(String queueName, String messageBody, int deDupeId) {
@@ -114,27 +137,6 @@ public class ManagerMain {
                 .messageGroupId("1")
                 .messageDeduplicationId(String.valueOf(deDupeId))
                 .build());
-    }
-
-    private static List<TitleReviews> splitTitleReviews(TitleReviews[] bigTitleReviews,int splitSize) {
-        List<TitleReviews> smallTitleReviewsList = new LinkedList<>(); //will hold all title Reviews with 5 reviews
-        for (TitleReviews tr : bigTitleReviews) {
-            int counterReviews = 0;
-            List<Review> fiveReviews = new LinkedList<>();
-            TitleReviews smallTr = new TitleReviews(tr.title(), fiveReviews);
-            for (Review rev : tr.reviews()) {
-                if (counterReviews < splitSize) {
-                    fiveReviews.add(rev);
-                    counterReviews++;
-                } else { //counterReview == 5
-                    smallTitleReviewsList.add(smallTr);
-                    fiveReviews = new LinkedList<>();
-                    smallTr = new TitleReviews(tr.title(), fiveReviews);
-                    counterReviews = 0;
-                }
-            }
-        }
-        return smallTitleReviewsList;
     }
 
     private static void startWorkers(int count) {
