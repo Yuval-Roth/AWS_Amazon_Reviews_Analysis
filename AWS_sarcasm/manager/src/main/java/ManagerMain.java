@@ -1,4 +1,5 @@
 
+import edu.stanford.nlp.semgraph.SemanticGraph;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.ec2.Ec2Client;
 import software.amazon.awssdk.services.ec2.model.*;
@@ -13,6 +14,7 @@ import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
 import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
 
 import java.util.*;
+import java.util.concurrent.Semaphore;
 
 public class ManagerMain {
 
@@ -26,9 +28,10 @@ public class ManagerMain {
     public static final String WORKER_IMAGE_ID = "ami-0f3fcfc1ba98c6fb9";
     public static final String SECURITY_GROUP = "sg-00c67312e0a74a525";
     public static final String INSTANCE_TYPE = "t2.medium";
+    public static final int MANAGER_ID = 1;
     private static Ec2Client ec2;
     private static int workerCount;
-    private static int workerIdCounter;
+    private static int instanceIdCounter;
     // </EC2>
 
 
@@ -36,7 +39,7 @@ public class ManagerMain {
     private static final String WORKER_MESSAGE_GROUP_ID = "workerGroup";
     private static final String WORKER_IN_QUEUE_NAME = "workerInQueue";
     private static final String WORKER_OUT_QUEUE_NAME = "workerOutQueue";
-    private static final String USER_INPUT_MESSAGE_GROUP_ID = "userInputGroup";
+    private static final String USER_MESSAGE_GROUP_ID = "userGroup";
     private static final String USER_INPUT_QUEUE_NAME = "userInputQueue";
     private static final String USER_OUTPUT_QUEUE_NAME = "userOutputQueue";
     private static final String SQS_DOMAIN_PREFIX = "https://sqs.us-east-1.amazonaws.com/057325794177/";
@@ -49,6 +52,10 @@ public class ManagerMain {
     private static int jobIdCounter;
     private static Map<Integer,ClientRequest> clientRequestIdToClientRequest;
     private static Map<Integer, Integer> jobIdToClientRequestId;
+    private static Semaphore completedJobsLock;
+    private static Semaphore clientRequestsLock;
+    private static Semaphore workerCountLock;
+
 
     public static void main(String[] args) {
 
@@ -67,51 +74,112 @@ public class ManagerMain {
         jobIdToClientRequestId = new HashMap<>();
         clientRequestIdToClientRequest = new HashMap<>();
         jobIdCounter = 0;
+        instanceIdCounter = 2;
+        completedJobsLock = new Semaphore(1);
+        clientRequestsLock = new Semaphore(1);
+        workerCountLock = new Semaphore(1);
+
+        final Exception[] exceptionHandler = new Exception[1];
+
+
+        while(true){
+            Thread t = new Thread(()-> mainLoop(exceptionHandler));
+            t.start();
+            mainLoop(exceptionHandler);
+
+            try {
+                t.join();
+            } catch (InterruptedException ignored) {}
+            if(exceptionHandler[0] != null){
+                handleException(exceptionHandler[0]);
+                exceptionHandler[0] = null;
+            }
+        }
+
+    }
+
+    private static void mainLoop(Exception[] exceptionHandler) {
+
+        while(exceptionHandler[0] == null){
+            try{
+
+                if(clientRequestsLock.tryAcquire()) {
+                    checkForClientRequests();
+                }
+
+                if(completedJobsLock.tryAcquire()) {
+                    checkForCompletedJobs();
+                }
+
+                if(workerCountLock.tryAcquire()) {
+                    balanceWorkerCount();
+                }
+
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException ignored) {}
+
+
+            } catch (Exception e){
+                exceptionHandler[0] = e;
+                return;
+            }
+        }
+    }
+
+    private static void balanceWorkerCount() {
+        //TODO: implement
+    }
+
+    private static void handleException(Exception e) {
+
+        //TODO: make a more robust exception handling
+        e.printStackTrace();
 
     }
 
     private static void checkForCompletedJobs(){
 
-            ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
-                    .maxNumberOfMessages(1)
-                    .queueUrl(getQueueURL(WORKER_OUT_QUEUE_NAME))
-                    .build();
+        ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
+                .maxNumberOfMessages(1)
+                .queueUrl(getQueueURL(WORKER_OUT_QUEUE_NAME))
+                .build();
 
-            var r = sqs.receiveMessage(messageRequest);
+        var r = sqs.receiveMessage(messageRequest);
 
-            if(r.hasMessages()){
+        if(r.hasMessages()){
 
-                // read message and create job object
-                String message = r.messages().getFirst().body();
-                Job job = JsonUtils.deserialize(message, Job.class);
+            // read message and create job object
+            String message = r.messages().getFirst().body();
+            Job job = JsonUtils.deserialize(message, Job.class);
 
-                if(job.action() != Job.Action.DONE){
-                    throw new IllegalStateException("Received job with action " + job.action()+ " from worker");
-                }
-
-                // get client request
-                int clientRequestId = jobIdToClientRequestId.get(job.jobId());
-                ClientRequest clientRequest = clientRequestIdToClientRequest.get(clientRequestId);
-
-                // add job output to client request and decrement the number of jobs left
-                // in the client request
-                TitleReviews tr = JsonUtils.deserialize(job.data(), TitleReviews.class);
-                clientRequest.addTitleReviews(tr);
-                clientRequest.decrementNumJobs();
-                jobIdToClientRequestId.remove(job.jobId()); // remove job id from map
-
-                // check if client request is done
-                if(clientRequest.isDone()){
-
-                    // send completed client request to user
-                    CompletedClientRequest completedClientRequest = clientRequest.getCompletedRequest();
-                    String messageBody = JsonUtils.serialize(completedClientRequest);
-                    sendToQueue(USER_OUTPUT_QUEUE_NAME, messageBody, clientRequestId);
-
-                    // remove client request
-                    clientRequestIdToClientRequest.remove(clientRequestId);
-                }
+            if(job.action() != Job.Action.DONE){
+                throw new IllegalStateException("Received job with action " + job.action()+ " from worker");
             }
+
+            // get client request
+            int clientRequestId = jobIdToClientRequestId.get(job.jobId());
+            ClientRequest clientRequest = clientRequestIdToClientRequest.get(clientRequestId);
+
+            // add job output to client request and decrement the number of jobs left
+            // in the client request
+            TitleReviews tr = JsonUtils.deserialize(job.data(), TitleReviews.class);
+            clientRequest.addTitleReviews(tr);
+            clientRequest.decrementNumJobs();
+            jobIdToClientRequestId.remove(job.jobId()); // remove job id from map
+
+            // check if client request is done
+            if(clientRequest.isDone()){
+
+                // send completed client request to user
+                CompletedClientRequest completedClientRequest = clientRequest.getCompletedRequest();
+                String messageBody = JsonUtils.serialize(completedClientRequest);
+                sendToQueue(USER_OUTPUT_QUEUE_NAME, messageBody, USER_MESSAGE_GROUP_ID);
+
+                // remove client request
+                clientRequestIdToClientRequest.remove(clientRequestId);
+            }
+        }
     }
 
     private static void checkForClientRequests() {
@@ -138,7 +206,6 @@ public class ManagerMain {
                     .toArray(TitleReviews[]::new);
 
             // split client request to jobs and send to workers
-            Random rand = new Random();
             for (TitleReviews tr : titleReviewsList) {
 
                 // create job and increment job id
@@ -150,7 +217,7 @@ public class ManagerMain {
                 jobIdToClientRequestId.put(job.jobId(),clientRequest.requestId());
 
                 // send job to worker
-                sendToQueue(WORKER_IN_QUEUE_NAME, messageBody, rand.nextInt());
+                sendToQueue(WORKER_IN_QUEUE_NAME, messageBody,WORKER_MESSAGE_GROUP_ID);
             }
         }
     }
@@ -174,18 +241,22 @@ public class ManagerMain {
         return smallTitleReviewsList;
     }
 
-    private static void sendToQueue(String queueName, String messageBody, int deDupeId) {
+    private static void sendToQueue(String queueName, String messageBody, String messageGroupId) {
         sqs.sendMessage(SendMessageRequest.builder()
                 .queueUrl(getQueueURL(queueName))
                 .messageBody(messageBody)
-                .messageGroupId("1")
-                .messageDeduplicationId(String.valueOf(deDupeId))
+                .messageGroupId(messageGroupId)
+                .messageDeduplicationId(getDeDupeId())
                 .build());
+    }
+
+    private static String getDeDupeId(){
+        return MANAGER_ID+ "-" + UUID.randomUUID();
     }
 
     private static void startWorkers(int count) {
         for (int i = 0; i < count; i++) {
-            startWorker(workerIdCounter++);
+            startWorker(instanceIdCounter++);
         }
     }
 
@@ -224,7 +295,7 @@ public class ManagerMain {
                         getQueueURL(WORKER_IN_QUEUE_NAME),
                         getQueueURL(WORKER_OUT_QUEUE_NAME),
                         WORKER_MESSAGE_GROUP_ID,
-                        workerIdCounter
+                instanceIdCounter
                 );
 
     }
