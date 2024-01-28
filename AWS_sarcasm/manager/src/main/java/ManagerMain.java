@@ -70,6 +70,50 @@ public class ManagerMain {
 
     }
 
+    private static void checkForCompletedJobs(){
+
+            ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
+                    .maxNumberOfMessages(1)
+                    .queueUrl(getQueueURL(WORKER_OUT_QUEUE_NAME))
+                    .build();
+
+            var r = sqs.receiveMessage(messageRequest);
+
+            if(r.hasMessages()){
+
+                // read message and create job object
+                String message = r.messages().getFirst().body();
+                Job job = JsonUtils.deserialize(message, Job.class);
+
+                if(job.action() != Job.Action.DONE){
+                    throw new IllegalStateException("Received job with action " + job.action()+ " from worker");
+                }
+
+                // get client request
+                int clientRequestId = jobIdToClientRequestId.get(job.jobId());
+                ClientRequest clientRequest = clientRequestIdToClientRequest.get(clientRequestId);
+
+                // add job output to client request and decrement the number of jobs left
+                // in the client request
+                TitleReviews tr = JsonUtils.deserialize(job.data(), TitleReviews.class);
+                clientRequest.addTitleReviews(tr);
+                clientRequest.decrementNumJobs();
+                jobIdToClientRequestId.remove(job.jobId()); // remove job id from map
+
+                // check if client request is done
+                if(clientRequest.isDone()){
+
+                    // send completed client request to user
+                    CompletedClientRequest completedClientRequest = clientRequest.getCompletedRequest();
+                    String messageBody = JsonUtils.serialize(completedClientRequest);
+                    sendToQueue(USER_OUTPUT_QUEUE_NAME, messageBody, clientRequestId);
+
+                    // remove client request
+                    clientRequestIdToClientRequest.remove(clientRequestId);
+                }
+            }
+    }
+
     private static void checkForClientRequests() {
 
         ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
