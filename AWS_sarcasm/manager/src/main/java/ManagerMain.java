@@ -79,8 +79,13 @@ public class ManagerMain {
         clientRequestsLock = new Semaphore(1);
         workerCountLock = new Semaphore(1);
 
-        final Exception[] exceptionHandler = new Exception[1];
+        createBucketIfNotExists(BUCKET_NAME);
+        createQueueIfNotExists(WORKER_IN_QUEUE_NAME);
+        createQueueIfNotExists(WORKER_OUT_QUEUE_NAME);
+        createQueueIfNotExists(USER_INPUT_QUEUE_NAME);
+        createQueueIfNotExists(USER_OUTPUT_QUEUE_NAME);
 
+        final Exception[] exceptionHandler = new Exception[1];
 
         while(true){
             Thread t = new Thread(()-> mainLoop(exceptionHandler));
