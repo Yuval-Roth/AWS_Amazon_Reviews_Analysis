@@ -1,7 +1,8 @@
-public record Job(int jobIdCounter, Action action, String input) {
+public record Job(int jobId, Action action,String input) {
     enum Action {
         NONE,
         PROCESS,
-        SHUTDOWN
+        SHUTDOWN,
+        DONE
     }
 }
