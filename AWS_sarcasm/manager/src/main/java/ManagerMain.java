@@ -19,10 +19,23 @@ import java.util.List;
 import java.util.Random;
 
 public class ManagerMain {
+
+    // <S3>
     public static final String BUCKET_NAME = "distributed-systems-2024-bucket-yuval-adi";
+    private static S3Client s3;
+    // </S3>
+
+    // <EC2>
     public static final String WORKER_IMAGE_ID = "ami-0f3fcfc1ba98c6fb9";
     public static final String SECURITY_GROUP = "sg-00c67312e0a74a525";
     public static final String INSTANCE_TYPE = "t2.medium";
+    private static Ec2Client ec2;
+    private static int workerCount;
+    private static int workerIdCounter;
+    // </EC2>
+
+
+    // <SQS>
     private static final String WORKER_MESSAGE_GROUP_ID = "workerGroup";
     private static final String WORKER_IN_QUEUE_NAME = "workerInQueue";
     private static final String WORKER_OUT_QUEUE_NAME = "workerOutQueue";
@@ -30,13 +43,11 @@ public class ManagerMain {
     private static final String USER_INPUT_QUEUE_NAME = "userInputQueue";
     private static final String USER_OUTPUT_QUEUE_NAME = "userOutputQueue";
     private static final String SQS_DOMAIN_PREFIX = "https://sqs.us-east-1.amazonaws.com/057325794177/";
-    private static Region ec2_region = Region.US_EAST_1;
-    private static Region s3_region = Region.US_WEST_2;
     private static SqsClient sqs;
-    private static S3Client s3;
-    private static Ec2Client ec2;
-    private static int workerCount;
-    private static int workerId;
+    // </SQS>
+
+    private static final Region ec2_region = Region.US_EAST_1;
+    private static final Region s3_region = Region.US_WEST_2;
 
     public static void main(String[] args) {
 
@@ -51,6 +62,8 @@ public class ManagerMain {
         ec2 = Ec2Client.builder()
                 .region(ec2_region)
                 .build();
+
+
 
 
     }
@@ -90,7 +103,7 @@ public class ManagerMain {
 
     private static void startWorkers(int count) {
         for (int i = 0; i < count; i++) {
-            startWorker(workerId++);
+            startWorker(workerIdCounter++);
         }
     }
 
@@ -129,7 +142,7 @@ public class ManagerMain {
                         getQueueURL(WORKER_IN_QUEUE_NAME),
                         getQueueURL(WORKER_OUT_QUEUE_NAME),
                         WORKER_MESSAGE_GROUP_ID,
-                        workerId
+                        workerIdCounter
                 );
 
     }
