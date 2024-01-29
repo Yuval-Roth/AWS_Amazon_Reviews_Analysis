@@ -1,5 +1,6 @@
 
 import edu.stanford.nlp.semgraph.SemanticGraph;
+import org.apache.commons.lang3.NotImplementedException;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.ec2.Ec2Client;
 import software.amazon.awssdk.services.ec2.model.*;
@@ -7,11 +8,7 @@ import software.amazon.awssdk.services.ec2.model.Tag;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.*;
 import software.amazon.awssdk.services.sqs.SqsClient;
-import software.amazon.awssdk.services.sqs.model.CreateQueueRequest;
-import software.amazon.awssdk.services.sqs.model.ListQueuesRequest;
-import software.amazon.awssdk.services.sqs.model.QueueAttributeName;
-import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
-import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
+import software.amazon.awssdk.services.sqs.model.*;
 
 import java.util.*;
 import java.util.concurrent.Semaphore;
@@ -39,6 +36,7 @@ public class ManagerMain {
     private static final String WORKER_MESSAGE_GROUP_ID = "workerGroup";
     private static final String WORKER_IN_QUEUE_NAME = "workerInQueue";
     private static final String WORKER_OUT_QUEUE_NAME = "workerOutQueue";
+    private static final String WORKER_MANAGEMENT_QUEUE_NAME = "workerManagementQueue";
     private static final String USER_MESSAGE_GROUP_ID = "userGroup";
     private static final String USER_INPUT_QUEUE_NAME = "userInputQueue";
     private static final String USER_OUTPUT_QUEUE_NAME = "userOutputQueue";
@@ -55,9 +53,14 @@ public class ManagerMain {
     private static Semaphore completedJobsLock;
     private static Semaphore clientRequestsLock;
     private static Semaphore workerCountLock;
+    private static boolean debugMode;
 
 
     public static void main(String[] args) {
+
+        if(args.length > 0 && args[0].equals("debug")){
+            debugMode = true;
+        }
 
         sqs = SqsClient.builder()
                 .region(ec2_region)
@@ -82,8 +85,10 @@ public class ManagerMain {
         createBucketIfNotExists(BUCKET_NAME);
         createQueueIfNotExists(WORKER_IN_QUEUE_NAME);
         createQueueIfNotExists(WORKER_OUT_QUEUE_NAME);
+        createQueueIfNotExists(WORKER_MANAGEMENT_QUEUE_NAME);
         createQueueIfNotExists(USER_INPUT_QUEUE_NAME);
         createQueueIfNotExists(USER_OUTPUT_QUEUE_NAME);
+
 
         final Exception[] exceptionHandler = new Exception[1];
 
@@ -116,8 +121,10 @@ public class ManagerMain {
                     checkForCompletedJobs();
                 }
 
-                if(workerCountLock.tryAcquire()) {
-                    balanceWorkerCount();
+                if(! debugMode){
+                    if(workerCountLock.tryAcquire()) {
+                        balanceWorkerCount();
+                    }
                 }
 
                 try {
@@ -133,7 +140,37 @@ public class ManagerMain {
     }
 
     private static void balanceWorkerCount() {
+
+        // get number of workers
+        int workerCount = getWorkerCount();
+        int requiredWorkerCount = Math.min(MAX_WORKERS,getRequiredWorkerCount());
+
+        if(workerCount < requiredWorkerCount){
+            startWorkers(requiredWorkerCount - workerCount);
+        } else if(workerCount > requiredWorkerCount){
+            stopWorkers(workerCount - requiredWorkerCount);
+        }
+    }
+
+    private static void stopWorkers(int count) {
+        for(int i = 0; i < count; i++){
+            Job stopJob = new Job(-1, Job.Action.SHUTDOWN, "");
+            sendToQueue(WORKER_MANAGEMENT_QUEUE_NAME, JsonUtils.serialize(stopJob), WORKER_MESSAGE_GROUP_ID);
+        }
+    }
+
+    private static int getRequiredWorkerCount() {
         //TODO: implement
+        throw new NotImplementedException("getRequiredWorkerCount not implemented");
+    }
+
+    private static int getWorkerCount() {
+        return (int) ec2.describeInstances().reservations().stream()
+                .flatMap(reservation -> reservation.instances().stream())
+                .filter(instance -> ! instance.state().name().equals(InstanceStateName.TERMINATED))
+                .filter(instance -> instance.tags().stream()
+                        .noneMatch(tag -> tag.key().equals("Name") && tag.value().equals("ManagerInstance")))
+                .count();
     }
 
     private static void handleException(Exception e) {
@@ -145,44 +182,70 @@ public class ManagerMain {
 
     private static void checkForCompletedJobs(){
 
+        List<SendMessageBatchRequestEntry> messagesToSend = new LinkedList<>();
+
         ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
-                .maxNumberOfMessages(1)
                 .queueUrl(getQueueURL(WORKER_OUT_QUEUE_NAME))
                 .build();
 
         var r = sqs.receiveMessage(messageRequest);
 
         if(r.hasMessages()){
+            for(var message : r.messages()) {
+                // read message and create job object
+                Job job = JsonUtils.deserialize(message.body(), Job.class);
 
-            // read message and create job object
-            String message = r.messages().getFirst().body();
-            Job job = JsonUtils.deserialize(message, Job.class);
+                // check if job was duplicated and already handled
+                if (jobIdToClientRequestId.containsKey(job.jobId())) {
 
-            if(job.action() != Job.Action.DONE){
-                throw new IllegalStateException("Received job with action " + job.action()+ " from worker");
+                    // job was not duplicated, handle normally
+
+                    if (job.action() != Job.Action.DONE) {
+                        throw new IllegalStateException("Received job with action " + job.action() + " from worker");
+                    }
+
+                    // get client request
+                    int clientRequestId = jobIdToClientRequestId.get(job.jobId());
+                    ClientRequest clientRequest = clientRequestIdToClientRequest.get(clientRequestId);
+
+                    // add job output to client request and decrement the number of jobs left
+                    // in the client request
+                    TitleReviews tr = JsonUtils.deserialize(job.data(), TitleReviews.class);
+                    clientRequest.addTitleReviews(tr);
+                    clientRequest.decrementNumJobs();
+                    jobIdToClientRequestId.remove(job.jobId()); // remove job id from map
+
+                    // check if client request is done
+                    if (clientRequest.isDone()) {
+
+                        // we want to delete the messages from the queue as soon as possible,
+                        // so we send the finished requests later
+                        CompletedClientRequest completedClientRequest = clientRequest.getCompletedRequest();
+                        String messageBody = JsonUtils.serialize(completedClientRequest);
+                        messagesToSend.add(SendMessageBatchRequestEntry.builder()
+                                        .messageBody(messageBody)
+                                        .messageDeduplicationId(getDeDupeId())
+                                        .messageGroupId(clientRequest.clientId())
+                                .build());
+
+                        // remove client request
+                        clientRequestIdToClientRequest.remove(clientRequestId);
+                    }
+                }
+
+                // delete message from queue
+                sqs.deleteMessage(software.amazon.awssdk.services.sqs.model.DeleteMessageRequest.builder()
+                        .queueUrl(getQueueURL(WORKER_OUT_QUEUE_NAME))
+                        .receiptHandle(message.receiptHandle())
+                        .build());
             }
 
-            // get client request
-            int clientRequestId = jobIdToClientRequestId.get(job.jobId());
-            ClientRequest clientRequest = clientRequestIdToClientRequest.get(clientRequestId);
-
-            // add job output to client request and decrement the number of jobs left
-            // in the client request
-            TitleReviews tr = JsonUtils.deserialize(job.data(), TitleReviews.class);
-            clientRequest.addTitleReviews(tr);
-            clientRequest.decrementNumJobs();
-            jobIdToClientRequestId.remove(job.jobId()); // remove job id from map
-
-            // check if client request is done
-            if(clientRequest.isDone()){
-
-                // send completed client request to user
-                CompletedClientRequest completedClientRequest = clientRequest.getCompletedRequest();
-                String messageBody = JsonUtils.serialize(completedClientRequest);
-                sendToQueue(USER_OUTPUT_QUEUE_NAME, messageBody, USER_MESSAGE_GROUP_ID);
-
-                // remove client request
-                clientRequestIdToClientRequest.remove(clientRequestId);
+            // send completed client requests to users
+            if(! messagesToSend.isEmpty()){
+                sqs.sendMessageBatch(SendMessageBatchRequest.builder()
+                        .queueUrl(getQueueURL(USER_OUTPUT_QUEUE_NAME))
+                        .entries(messagesToSend)
+                        .build());
             }
         }
     }
@@ -256,7 +319,7 @@ public class ManagerMain {
     }
 
     private static String getDeDupeId(){
-        return MANAGER_ID+ "-" + UUID.randomUUID();
+        return "%s-%s-%s".formatted(MANAGER_ID,Thread.currentThread().getName(),UUID.randomUUID());
     }
 
     private static void startWorkers(int count) {
@@ -294,13 +357,14 @@ public class ManagerMain {
                 mkdir /runtimedir
                 cd /runtimedir
                 aws s3 cp %s workerMain.jar > workerMain_download.log 2>&1
-                java -Xmx4500m -Xms3750m -jar workerMain.jar %s %s %s %s > output.log 2>&1
+                java -Xmx4500m -Xms3750m -jar workerMain.jar %s %s %s %s %s > output.log 2>&1
                 sudo shutdown -h now""".formatted(
                         workerJarUri,
-                        getQueueURL(WORKER_IN_QUEUE_NAME),
-                        getQueueURL(WORKER_OUT_QUEUE_NAME),
+                        getQueueURL(getQueueURL(WORKER_IN_QUEUE_NAME)),
+                        getQueueURL(getQueueURL(WORKER_OUT_QUEUE_NAME)),
+                        getQueueURL(getQueueURL(WORKER_MANAGEMENT_QUEUE_NAME)),
                         WORKER_MESSAGE_GROUP_ID,
-                instanceIdCounter
+                        instanceIdCounter
                 );
 
     }

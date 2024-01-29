@@ -1,9 +1,9 @@
 import java.util.LinkedList;
 import java.util.List;
 
-public record ClientRequest (int requestId, String input, List<TitleReviews> output, Integer[] numJobs){
-    public ClientRequest(int requestId, String input){
-        this(requestId, input, new LinkedList<>(), new Integer[]{0});
+public record ClientRequest (String clientId,int requestId, String input, List<TitleReviews> output, Integer[] numJobs){
+    public ClientRequest(String clientId, int requestId, String input){
+        this(clientId, requestId, input, new LinkedList<>(), new Integer[]{0});
     }
 
     public void addTitleReviews(TitleReviews tr){

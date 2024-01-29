@@ -5,7 +5,7 @@ import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
 import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
 
 import java.util.Map;
-import java.util.Random;
+import java.util.UUID;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
@@ -17,27 +17,29 @@ public class WorkerMain {
     private static AtomicBoolean isRunning;
     private static String IN_QUEUE_URL;
     private static String OUT_QUEUE_URL;
+    private static String MANAGER_QUEUE_URL;
     private static String MESSAGE_GROUP_ID;
-    private static String MESSAGE_DEDUPLICATION_ID;
+    private static String WORKER_ID;
     private static SqsClient sqs;
-    private static Semaphore sqsLock;
+    private static Semaphore managerQueueLock;
 
     public static void main(String[] args){
 
-        if(args.length != 4){
-            System.out.println("Usage: WorkerMain <in_queue_url> <out_queue_url> <message_group_id> <message_deduplication_id>");
+        if(args.length != 5){
+            System.out.println("Usage: WorkerMain <worker_id> <in_queue_name> <out_queue_name> <manager_queue_name> <message_group_id>");
             System.exit(1);
         }
 
-        IN_QUEUE_URL = args[0];
-        OUT_QUEUE_URL = args[1];
-        MESSAGE_GROUP_ID = args[2];
-        MESSAGE_DEDUPLICATION_ID = args[3];
+        WORKER_ID = args[0];
+        IN_QUEUE_URL = args[1];
+        OUT_QUEUE_URL = args[2];
+        MANAGER_QUEUE_URL = args[3];
+        MESSAGE_GROUP_ID = args[4];
 
         sqs = SqsClient.builder()
                 .region(Region.US_EAST_1)
                 .build();
-        sqsLock = new Semaphore(1,true);
+        managerQueueLock = new Semaphore(1);
 
         // BASE ASSUMPTION: This code is running on a machine with 2 vCPUs
         Thread t;
@@ -69,17 +71,8 @@ public class WorkerMain {
                 .queueUrl(IN_QUEUE_URL)
                 .build();
 
-        Random rand = new Random();
-
         // Main loop
         while(isRunning.get()){
-
-            // ensure only one thread is accessing the queue at a time
-            // this is done to prevent multiple threads from receiving a shutdown message
-            try {
-                sqsLock.acquire();
-            } catch (InterruptedException ignored) {}
-            if(!isRunning.get()) break; // Check if another thread received a shutdown message
 
             // Receive message from in queue
             var request = sqs.receiveMessage(messageRequest);
@@ -88,25 +81,16 @@ public class WorkerMain {
                 // Deserialize job
                 Job job = JsonUtils.deserialize(request.messages().getFirst().body(),Job.class);
 
-                switch(job.action()){
-                    case PROCESS -> {
-                        sqsLock.release();
+                if(job.action() == Job.Action.PROCESS) {
 
-                        // Process message and send to out queue
-                        String output = processMessage(job.input());
-                        String deDupeId = "%s-%s-%s".formatted(MESSAGE_DEDUPLICATION_ID, Thread.currentThread().getName(), rand.nextInt());
-                        sqs.sendMessage(SendMessageRequest.builder()
-                                .queueUrl(OUT_QUEUE_URL)
-                                .messageBody(output)
-                                .messageGroupId(MESSAGE_GROUP_ID)
-                                .messageDeduplicationId(deDupeId)
-                                .build());
-                    }
-                    case SHUTDOWN -> {
-                        isRunning.set(false);
-                        sqsLock.release();
-                    }
-                    case NONE -> sqsLock.release(); // mostly for debugging purposes
+                    // Process message and send to out queue
+                    String output = processMessage(job.input());
+                    sqs.sendMessage(SendMessageRequest.builder()
+                            .queueUrl(OUT_QUEUE_URL)
+                            .messageBody(output)
+                            .messageGroupId(MESSAGE_GROUP_ID)
+                            .messageDeduplicationId(getDeDupeId())
+                            .build());
                 }
 
                 // Delete message from in queue
@@ -115,13 +99,42 @@ public class WorkerMain {
                         .receiptHandle(request.messages().getFirst().receiptHandle())
                         .build());
 
-            } else { // No messages
-                sqsLock.release();
-                try {
-                    Thread.sleep(1000);
-                } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
+            } else {
+                if(isRunning.get()){
+                    try {
+                        Thread.sleep(1000);
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
                 }
+            }
+
+            checkForShutdown();
+        }
+    }
+
+    private static void checkForShutdown() {
+
+        // ensure only one thread is accessing the manager queue at a time
+        // this is done to prevent multiple threads from receiving a shutdown message
+        if(managerQueueLock.tryAcquire()){
+            var request = sqs.receiveMessage(ReceiveMessageRequest.builder()
+                    .maxNumberOfMessages(1)
+                    .queueUrl(MANAGER_QUEUE_URL)
+                    .build());
+            if(request.hasMessages()){
+                Job job = JsonUtils.deserialize(request.messages().getFirst().body(),Job.class);
+                if(job.action() == Job.Action.SHUTDOWN){
+                    isRunning.set(false);
+                }
+                sqs.deleteMessage(software.amazon.awssdk.services.sqs.model.DeleteMessageRequest.builder()
+                        .queueUrl(MANAGER_QUEUE_URL)
+                        .receiptHandle(request.messages().getFirst().receiptHandle())
+                        .build());
+
+                // don't release lock if shutting down
+            } else {
+                managerQueueLock.release();
             }
         }
     }
@@ -148,5 +161,9 @@ public class WorkerMain {
 
         // Serialize reviews and return
         return JsonUtils.serialize(tr);
+    }
+
+    private static String getDeDupeId(){
+        return "%s-%s-%s".formatted(WORKER_ID,Thread.currentThread().getName(), UUID.randomUUID());
     }
 }
