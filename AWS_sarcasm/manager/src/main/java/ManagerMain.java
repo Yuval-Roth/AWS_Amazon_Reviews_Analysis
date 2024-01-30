@@ -1,5 +1,6 @@
 
 import org.apache.commons.lang3.NotImplementedException;
+import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.ec2.Ec2Client;
 import software.amazon.awssdk.services.ec2.model.*;
@@ -12,6 +13,7 @@ import software.amazon.awssdk.services.sqs.model.*;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class ManagerMain {
 
@@ -56,6 +58,7 @@ public class ManagerMain {
     private static volatile long nextClientRequestCheck;
     private static volatile long nextCompletedJobCheck;
     private static volatile long nextWorkerCountCheck;
+    private static AtomicBoolean shouldTerminate;
     // </APPLICATION DATA>
 
 
@@ -84,6 +87,7 @@ public class ManagerMain {
         completedJobsLock = new Semaphore(1);
         clientRequestsLock = new Semaphore(1);
         workerCountLock = new Semaphore(1);
+        shouldTerminate = new AtomicBoolean(false);
 
         createBucketIfNotExists(BUCKET_NAME);
         createQueueIfNotExists(WORKER_IN_QUEUE_NAME);
@@ -121,7 +125,7 @@ public class ManagerMain {
         while(exceptionHandler[0] == null){
             try{
 
-                if(System.currentTimeMillis() >= nextClientRequestCheck && clientRequestsLock.tryAcquire()) {
+                if(! shouldTerminate.get() && System.currentTimeMillis() >= nextClientRequestCheck && clientRequestsLock.tryAcquire()) {
                     checkForClientRequests();
                     nextClientRequestCheck = System.currentTimeMillis() + 1000;
                     clientRequestsLock.release();
@@ -175,13 +179,16 @@ public class ManagerMain {
                 // read message and create client request
                 ClientRequest clientRequest = JsonUtils.deserialize(message.body(), ClientRequest.class);
                 clientRequestIdToClientRequest.put(clientRequest.requestId(), clientRequest);
-                String input = downloadFromS3(clientRequest.input());
+                String input = downloadFromS3(clientRequest.fileName());
+                if(clientRequest.terminate()){
+                    shouldTerminate.set(true);
+                }
 
-                // Deserialize client request input and split to small TitleReviews
+                // Deserialize client request fileName and split to small TitleReviews
                 String[] jsons = input.split("\n");
                 TitleReviews[] titleReviewsList = Arrays.stream(jsons)
       /*deserialize*/   .map(json -> JsonUtils.<TitleReviews>deserialize(json, TitleReviews.class))
-            /*split*/   .flatMap(tr -> splitTitleReviews(tr, TR_JOB_SPLIT_SIZE).stream())
+            /*split*/   .flatMap(tr -> splitTitleReviews(tr, clientRequest.reviewsPerWorker()).stream())
                         .toArray(TitleReviews[]::new);
 
                 // split client request to jobs and send to workers
@@ -206,7 +213,7 @@ public class ManagerMain {
         }
     }
 
-    private static void checkForCompletedJobs(){
+    private static void checkForCompletedJobs() throws TerminateException {
 
         ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
                 .queueUrl(getQueueURL(WORKER_OUT_QUEUE_NAME))
@@ -215,8 +222,6 @@ public class ManagerMain {
         var r = sqs.receiveMessage(messageRequest);
 
         if(r.hasMessages()){
-
-            List<SendMessageBatchRequestEntry> messagesToSend = new LinkedList<>();
 
             for(var message : r.messages()) {
                 // read message and create job object
@@ -245,15 +250,16 @@ public class ManagerMain {
                     // check if client request is done
                     if (clientRequest.isDone()) {
 
-                        // we want to delete the messages from the queue as soon as possible,
-                        // so we send the finished requests later
-                        CompletedClientRequest completedClientRequest = clientRequest.getCompletedRequest();
-                        String messageBody = JsonUtils.serialize(completedClientRequest);
-                        messagesToSend.add(SendMessageBatchRequestEntry.builder()
-                                .messageBody(messageBody)
-                                .build());
+                        // upload client request output to s3
+                        String outputJson = clientRequest.getProcessedReviewsAsJson();
+                        String uploadedName = clientRequest.fileName() + "_completed";
+                        uploadToS3(uploadedName, outputJson);
 
-                        // remove client request
+                        // send completed notification to user
+                        CompletedClientRequest completedReq = clientRequest.getCompletedRequest(uploadedName);
+                        sendToQueue(USER_OUTPUT_QUEUE_NAME, JsonUtils.serialize(completedReq));
+
+                        // mark client request as done
                         clientRequestIdToClientRequest.remove(clientRequestId);
                     }
                 }
@@ -261,14 +267,10 @@ public class ManagerMain {
                 // delete message from queue
                 deleteFromQueue(message, WORKER_OUT_QUEUE_NAME);
             }
+        }
 
-            // send completed client requests to users
-            if(! messagesToSend.isEmpty()){
-                sqs.sendMessageBatch(SendMessageBatchRequest.builder()
-                        .queueUrl(getQueueURL(USER_OUTPUT_QUEUE_NAME))
-                        .entries(messagesToSend)
-                        .build());
-            }
+        if(shouldTerminate.get() && clientRequestIdToClientRequest.isEmpty()){
+            throw new TerminateException();
         }
     }
 
@@ -284,8 +286,6 @@ public class ManagerMain {
             stopWorkers(workerCount - requiredWorkerCount);
         }
     }
-
-
 
     // ============================================================================ |
     // ========================  AWS API FUNCTIONS  =============================== |
@@ -305,6 +305,13 @@ public class ManagerMain {
         }
 
         return new String(file);
+    }
+
+    private static void uploadToS3(String key, String content) {
+        s3.putObject(PutObjectRequest.builder()
+                    .bucket(BUCKET_NAME)
+                    .key(key).build(),
+                RequestBody.fromString(content));
     }
 
 
@@ -479,9 +486,13 @@ public class ManagerMain {
 
     private static void handleException(Exception e) {
 
+        if(e instanceof TerminateException){
+            stopWorkers(getWorkerCount());
+            System.exit(0);
+        }
+
         //TODO: make a more robust exception handling
         e.printStackTrace();
-
     }
 }
 

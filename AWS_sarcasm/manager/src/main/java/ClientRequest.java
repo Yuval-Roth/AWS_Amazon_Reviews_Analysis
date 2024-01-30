@@ -1,9 +1,17 @@
 import java.util.LinkedList;
 import java.util.List;
 
-public record ClientRequest (String clientId,int requestId, String input, List<TitleReviews> output, Integer[] numJobs){
-    public ClientRequest(String clientId, int requestId, String input){
-        this(clientId, requestId, input, new LinkedList<>(), new Integer[]{0});
+public record ClientRequest (
+        String clientId,
+        int requestId,
+        String fileName,
+        int reviewsPerWorker,
+        boolean terminate,
+        List<TitleReviews> output,
+        Integer[] numJobs
+        ){
+    public ClientRequest(String clientId, int requestId, String fileName, int reviewsPerWorker, boolean terminate){
+        this(clientId, requestId, fileName, reviewsPerWorker, terminate,new LinkedList<>(), new Integer[]{0});
     }
 
     public void addTitleReviews(TitleReviews tr){
@@ -27,14 +35,16 @@ public record ClientRequest (String clientId,int requestId, String input, List<T
     public boolean isDone(){
         return numJobs[0] == 0;
     }
-
-    public CompletedClientRequest getCompletedRequest(){
-
-        if(!isDone()){
-            throw new IllegalStateException("Cannot get completed request when not done");
+    public String getProcessedReviewsAsJson(){
+        StringBuilder sb = new StringBuilder();
+        for(TitleReviews tr : output){
+            sb.append(JsonUtils.serialize(tr)).append('\n');
         }
-
-        return new CompletedClientRequest(clientId,requestId, JsonUtils.serialize(output));
+        sb.deleteCharAt(sb.length()-1); // remove last newline
+        return sb.toString();
     }
 
+    public CompletedClientRequest getCompletedRequest(String fileName) {
+        return new CompletedClientRequest(clientId, requestId, fileName);
+    }
 }
