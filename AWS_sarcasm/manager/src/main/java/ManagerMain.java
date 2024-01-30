@@ -59,6 +59,7 @@ public class ManagerMain {
     private static volatile long nextCompletedJobCheck;
     private static volatile long nextWorkerCountCheck;
     private static AtomicBoolean shouldTerminate;
+    private static Thread thread2;
     // </APPLICATION DATA>
 
 
@@ -104,12 +105,12 @@ public class ManagerMain {
         nextWorkerCountCheck = System.currentTimeMillis();
 
         while(true){
-            Thread t = new Thread(()-> mainLoop(exceptionHandler));
-            t.start();
+            thread2 = new Thread(()-> mainLoop(exceptionHandler));
+            thread2.start();
             mainLoop(exceptionHandler);
 
             try {
-                t.join();
+                thread2.join();
             } catch (InterruptedException ignored) {}
             if(exceptionHandler[0] != null){
                 handleException(exceptionHandler[0]);
@@ -488,11 +489,24 @@ public class ManagerMain {
 
         if(e instanceof TerminateException){
             stopWorkers(getWorkerCount());
+            try {
+                thread2.join();
+            } catch (InterruptedException ignored) {}
             System.exit(0);
         }
 
-        //TODO: make a more robust exception handling
-        e.printStackTrace();
+        String stackTrace = stackTraceToString(e);
+        String logName = "error_manager_%s.log".formatted(UUID.randomUUID());
+        uploadToS3(logName,stackTrace);
+    }
+
+    private static String stackTraceToString(Exception e) {
+        StringBuilder output  = new StringBuilder();
+        output.append(e).append("\n");
+        for (var element: e.getStackTrace()) {
+            output.append("\t").append(element).append("\n");
+        }
+        return output.toString();
     }
 }
 

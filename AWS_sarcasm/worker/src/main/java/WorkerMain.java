@@ -1,5 +1,8 @@
 
+import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
 import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
@@ -7,25 +10,24 @@ import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Semaphore;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 public class WorkerMain {
 
     private static SentimentAnalysisHandler sentimentAnalysisHandler;
     private static NamedEntityRecognitionHandler namedEntityRecognitionHandler;
-    private static AtomicBoolean isRunning;
     private static String IN_QUEUE_URL;
     private static String OUT_QUEUE_URL;
     private static String MANAGER_QUEUE_URL;
-    private static String MESSAGE_GROUP_ID;
+    private static String BUCKET_URL;
     private static String WORKER_ID;
     private static SqsClient sqs;
     private static Semaphore managerQueueLock;
+    private static Thread thread2;
 
     public static void main(String[] args){
 
-        if(args.length != 4){
+        if(args.length != 5){
             System.out.println("Usage: WorkerMain <worker_id> <in_queue_name> <out_queue_name> <manager_queue_name>");
             System.exit(1);
         }
@@ -34,6 +36,7 @@ public class WorkerMain {
         IN_QUEUE_URL = args[1];
         OUT_QUEUE_URL = args[2];
         MANAGER_QUEUE_URL = args[3];
+        BUCKET_URL = args[4];
 
         sqs = SqsClient.builder()
                 .region(Region.US_EAST_1)
@@ -41,29 +44,34 @@ public class WorkerMain {
         managerQueueLock = new Semaphore(1);
 
         // BASE ASSUMPTION: This code is running on a machine with 2 vCPUs
-        Thread t;
 
         // init sentiment analysis handler and Entity recognition handler
         // this is done on two threads to save time
-        t = new Thread(()-> sentimentAnalysisHandler = SentimentAnalysisHandler.getInstance());
-        t.start();
+        thread2 = new Thread(() -> sentimentAnalysisHandler = SentimentAnalysisHandler.getInstance());
+        thread2.start();
         namedEntityRecognitionHandler = NamedEntityRecognitionHandler.getInstance();
         try {
-            t.join();
+            thread2.join();
         } catch (InterruptedException ignored) {}
 
+        final Exception[] exceptionHandler = new Exception[1];
         // start main loop
-        isRunning = new AtomicBoolean(true);
-        t = new Thread(WorkerMain::mainLoop);
-        t.start();
-        mainLoop();
+        while(true) {
+            thread2 = new Thread(() -> mainLoop(exceptionHandler));
+            thread2.start();
+            mainLoop(exceptionHandler);
 
-        try {
-            t.join();
-        } catch (InterruptedException ignored) {}
+            try {
+                thread2.join();
+            } catch (InterruptedException ignored) {}
+            if(exceptionHandler[0] != null){
+                handleException(exceptionHandler[0]);
+                exceptionHandler[0] = null;
+            }
+        }
     }
 
-    private static void mainLoop() {
+    private static void mainLoop(Exception[] exceptionHandler) {
 
         ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
                 .maxNumberOfMessages(1)
@@ -71,46 +79,51 @@ public class WorkerMain {
                 .build();
 
         // Main loop
-        while(isRunning.get()){
+        while(exceptionHandler[0] != null){
+            try{
+                // Receive message from in queue
+                var request = sqs.receiveMessage(messageRequest);
+                if(request.hasMessages()){
 
-            // Receive message from in queue
-            var request = sqs.receiveMessage(messageRequest);
-            if(request.hasMessages()){
+                    // Deserialize job
+                    Job job = JsonUtils.deserialize(request.messages().getFirst().body(),Job.class);
 
-                // Deserialize job
-                Job job = JsonUtils.deserialize(request.messages().getFirst().body(),Job.class);
+                    if(job.action() == Job.Action.PROCESS) {
 
-                if(job.action() == Job.Action.PROCESS) {
+                        // Process message and send to out queue
+                        String output = processMessage(job.input());
+                        Job doneJob = new Job(job.jobId(), Job.Action.DONE, output);
 
-                    // Process message and send to out queue
-                    String output = processMessage(job.input());
-                    sqs.sendMessage(SendMessageRequest.builder()
-                            .queueUrl(OUT_QUEUE_URL)
-                            .messageBody(output)
+                        sqs.sendMessage(SendMessageRequest.builder()
+                                .queueUrl(OUT_QUEUE_URL)
+                                .messageBody(JsonUtils.serialize(doneJob))
+                                .build());
+                    }
+
+                    // Delete message from in queue
+                    sqs.deleteMessage(software.amazon.awssdk.services.sqs.model.DeleteMessageRequest.builder()
+                            .queueUrl(IN_QUEUE_URL)
+                            .receiptHandle(request.messages().getFirst().receiptHandle())
                             .build());
-                }
 
-                // Delete message from in queue
-                sqs.deleteMessage(software.amazon.awssdk.services.sqs.model.DeleteMessageRequest.builder()
-                        .queueUrl(IN_QUEUE_URL)
-                        .receiptHandle(request.messages().getFirst().receiptHandle())
-                        .build());
-
-            } else {
-                if(isRunning.get()){
-                    try {
-                        Thread.sleep(1000);
-                    } catch (InterruptedException e) {
-                        throw new RuntimeException(e);
+                } else {
+                    if(exceptionHandler[0] != null){
+                        try {
+                            Thread.sleep(1000);
+                        } catch (InterruptedException e) {
+                            throw new RuntimeException(e);
+                        }
                     }
                 }
+                checkForShutdown();
+            } catch (Exception e){
+                exceptionHandler[0] = e;
+                return;
             }
-
-            checkForShutdown();
         }
     }
 
-    private static void checkForShutdown() {
+    private static void checkForShutdown() throws TerminateException {
 
         // ensure only one thread is accessing the manager queue at a time
         // this is done to prevent multiple threads from receiving a shutdown message
@@ -121,14 +134,15 @@ public class WorkerMain {
                     .build());
             if(request.hasMessages()){
                 Job job = JsonUtils.deserialize(request.messages().getFirst().body(),Job.class);
-                if(job.action() == Job.Action.SHUTDOWN){
-                    isRunning.set(false);
+                if(job.action() != Job.Action.SHUTDOWN){
+                    throw new IllegalStateException("Expected shutdown message, got: "+job.action());
                 }
                 sqs.deleteMessage(software.amazon.awssdk.services.sqs.model.DeleteMessageRequest.builder()
                         .queueUrl(MANAGER_QUEUE_URL)
                         .receiptHandle(request.messages().getFirst().receiptHandle())
                         .build());
 
+                throw new TerminateException();
                 // don't release lock if shutting down
             } else {
                 managerQueueLock.release();
@@ -160,7 +174,39 @@ public class WorkerMain {
         return JsonUtils.serialize(tr);
     }
 
-    private static String getDeDupeId(){
-        return "%s-%s-%s".formatted(WORKER_ID,Thread.currentThread().getName(), UUID.randomUUID());
+    private static void handleException(Exception e) {
+
+        if(e instanceof TerminateException){
+            try {
+                thread2.join();
+            } catch (InterruptedException ignored) {}
+            System.exit(0);
+        }
+
+        String stackTrace = stackTraceToString(e);
+        String logName = "error_worker%s_%s.log".formatted(WORKER_ID, UUID.randomUUID());
+        uploadToS3(logName,stackTrace);
+    }
+
+    private static void uploadToS3(String key, String content) {
+        S3Client s3 = S3Client.builder()
+                .region(Region.US_EAST_1)
+                .build();
+
+        s3.putObject(PutObjectRequest.builder()
+                        .bucket(BUCKET_URL)
+                        .key(key).build(),
+                RequestBody.fromString(content));
+
+        s3.close();
+    }
+
+    private static String stackTraceToString(Exception e) {
+        StringBuilder output  = new StringBuilder();
+        output.append(e).append("\n");
+        for (var element: e.getStackTrace()) {
+            output.append("\t").append(element).append("\n");
+        }
+        return output.toString();
     }
 }
