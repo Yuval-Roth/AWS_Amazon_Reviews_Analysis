@@ -51,7 +51,7 @@ public class ManagerMain {
     private static Semaphore completedJobsLock;
     private static Semaphore clientRequestsLock;
     private static Semaphore workerCountLock;
-    private static boolean debugMode;
+    private static volatile boolean debugMode;
     // </APPLICATION DATA>
 
 
@@ -189,8 +189,6 @@ public class ManagerMain {
 
     private static void checkForCompletedJobs(){
 
-        List<SendMessageBatchRequestEntry> messagesToSend = new LinkedList<>();
-
         ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
                 .queueUrl(getQueueURL(WORKER_OUT_QUEUE_NAME))
                 .build();
@@ -198,6 +196,9 @@ public class ManagerMain {
         var r = sqs.receiveMessage(messageRequest);
 
         if(r.hasMessages()){
+
+            List<SendMessageBatchRequestEntry> messagesToSend = new LinkedList<>();
+
             for(var message : r.messages()) {
                 // read message and create job object
                 Job job = JsonUtils.deserialize(message.body(), Job.class);
