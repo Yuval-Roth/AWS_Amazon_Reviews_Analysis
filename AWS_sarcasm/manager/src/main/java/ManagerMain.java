@@ -1,5 +1,4 @@
 
-import edu.stanford.nlp.semgraph.SemanticGraph;
 import org.apache.commons.lang3.NotImplementedException;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.ec2.Ec2Client;
@@ -27,7 +26,6 @@ public class ManagerMain {
     public static final String INSTANCE_TYPE = "t2.medium";
     public static final int MANAGER_ID = 1;
     private static Ec2Client ec2;
-    private static int workerCount;
     private static int instanceIdCounter;
     // </EC2>
 
@@ -36,8 +34,7 @@ public class ManagerMain {
     private static final String WORKER_MESSAGE_GROUP_ID = "workerGroup";
     private static final String WORKER_IN_QUEUE_NAME = "workerInQueue";
     private static final String WORKER_OUT_QUEUE_NAME = "workerOutQueue";
-    private static final String WORKER_MANAGEMENT_QUEUE_NAME = "workerManagementQueue";
-    private static final String USER_MESSAGE_GROUP_ID = "userGroup";
+    private static final String WORKER_MANAGEMENT_QUEUE_NAME = "workerManagementQueue.fifo";
     private static final String USER_INPUT_QUEUE_NAME = "userInputQueue";
     private static final String USER_OUTPUT_QUEUE_NAME = "userOutputQueue";
     private static final String SQS_DOMAIN_PREFIX = "https://sqs.us-east-1.amazonaws.com/057325794177/";
@@ -87,7 +84,7 @@ public class ManagerMain {
         createQueueIfNotExists(WORKER_OUT_QUEUE_NAME);
         createQueueIfNotExists(WORKER_MANAGEMENT_QUEUE_NAME);
         createQueueIfNotExists(USER_INPUT_QUEUE_NAME);
-        createQueueIfNotExists(USER_OUTPUT_QUEUE_NAME);
+        createQueueIfNotExists(USER_OUTPUT_QUEUE_NAME, 0);
 
 
         final Exception[] exceptionHandler = new Exception[1];
@@ -155,7 +152,7 @@ public class ManagerMain {
     private static void stopWorkers(int count) {
         for(int i = 0; i < count; i++){
             Job stopJob = new Job(-1, Job.Action.SHUTDOWN, "");
-            sendToQueue(WORKER_MANAGEMENT_QUEUE_NAME, JsonUtils.serialize(stopJob), WORKER_MESSAGE_GROUP_ID);
+            sendToQueue(getQueueURL(WORKER_MANAGEMENT_QUEUE_NAME), JsonUtils.serialize(stopJob), WORKER_MESSAGE_GROUP_ID);
         }
     }
 
@@ -224,8 +221,6 @@ public class ManagerMain {
                         String messageBody = JsonUtils.serialize(completedClientRequest);
                         messagesToSend.add(SendMessageBatchRequestEntry.builder()
                                         .messageBody(messageBody)
-                                        .messageDeduplicationId(getDeDupeId())
-                                        .messageGroupId(clientRequest.clientId())
                                 .build());
 
                         // remove client request
@@ -285,7 +280,7 @@ public class ManagerMain {
                 jobIdToClientRequestId.put(job.jobId(),clientRequest.requestId());
 
                 // send job to worker
-                sendToQueue(WORKER_IN_QUEUE_NAME, messageBody,WORKER_MESSAGE_GROUP_ID);
+                sendToQueue(getQueueURL(WORKER_IN_QUEUE_NAME), messageBody);
             }
         }
     }
@@ -309,13 +304,21 @@ public class ManagerMain {
         return smallTitleReviewsList;
     }
 
-    private static void sendToQueue(String queueName, String messageBody, String messageGroupId) {
-        sqs.sendMessage(SendMessageRequest.builder()
-                .queueUrl(getQueueURL(queueName))
-                .messageBody(messageBody)
-                .messageGroupId(messageGroupId)
-                .messageDeduplicationId(getDeDupeId())
-                .build());
+    private static void sendToQueue(String queueURL, String messageBody) {
+        sendToQueue(queueURL, messageBody, null);
+    }
+
+    private static void sendToQueue(String queueURL, String messageBody, String messageGroupId) {
+        SendMessageRequest.Builder builder = SendMessageRequest.builder()
+                .queueUrl(queueURL)
+                .messageBody(messageBody);
+
+        if(messageGroupId != null){
+            builder
+                    .messageDeduplicationId(getDeDupeId())
+                    .messageGroupId(messageGroupId);
+        }
+        sqs.sendMessage(builder.build());
     }
 
     private static String getDeDupeId(){
@@ -356,21 +359,18 @@ public class ManagerMain {
                 #!/bin/bash
                 mkdir /runtimedir
                 cd /runtimedir
-                aws s3 cp %s workerMain.jar > workerMain_download.log 2>&1
-                java -Xmx4500m -Xms3750m -jar workerMain.jar %s %s %s %s %s > output.log 2>&1
+                java -Xmx4500m -Xms3750m -jar workerMain.jar %s %s %s %s > output.log 2>&1
                 sudo shutdown -h now""".formatted(
-                        workerJarUri,
-                        getQueueURL(getQueueURL(WORKER_IN_QUEUE_NAME)),
-                        getQueueURL(getQueueURL(WORKER_OUT_QUEUE_NAME)),
-                        getQueueURL(getQueueURL(WORKER_MANAGEMENT_QUEUE_NAME)),
-                        WORKER_MESSAGE_GROUP_ID,
-                        instanceIdCounter
+                        instanceIdCounter,
+                        getQueueURL(WORKER_IN_QUEUE_NAME),
+                        getQueueURL(WORKER_OUT_QUEUE_NAME),
+                        getQueueURL(WORKER_MANAGEMENT_QUEUE_NAME)
                 );
 
     }
 
     private static String getQueueURL(String queueName){
-        return SQS_DOMAIN_PREFIX + queueName + ".fifo";
+        return SQS_DOMAIN_PREFIX + queueName;
     }
 
     private static void createBucketIfNotExists(String bucketName){
@@ -397,6 +397,10 @@ public class ManagerMain {
     }
 
     private static void createQueueIfNotExists(String queueName){
+        createQueueIfNotExists(queueName, null);
+    }
+
+    private static void createQueueIfNotExists(String queueName, Integer visibilityTimeout){
 
         boolean queueExists = sqs.listQueues(ListQueuesRequest.builder()
                         .queueNamePrefix(queueName)
@@ -404,16 +408,22 @@ public class ManagerMain {
 
         if(! queueExists){
             CreateQueueRequest createQueueRequest = CreateQueueRequest.builder()
-                    .queueName(queueName + ".fifo")
+                    .queueName(queueName)
                     .attributes(new HashMap<>(){{
-                        put(QueueAttributeName.FIFO_QUEUE, "true");
-                        put(QueueAttributeName.CONTENT_BASED_DEDUPLICATION, "false");
+                        if(visibilityTimeout != null){
+                            put(QueueAttributeName.VISIBILITY_TIMEOUT, String.valueOf(visibilityTimeout));
+                        }
+                        if (queueName.endsWith(".fifo")) {
+                            put(QueueAttributeName.FIFO_QUEUE, "true");
+                            put(QueueAttributeName.CONTENT_BASED_DEDUPLICATION, "false");
+                        }
                     }})
                     .build();
 
             sqs.createQueue(createQueueRequest);
         }
     }
+
 }
 
 

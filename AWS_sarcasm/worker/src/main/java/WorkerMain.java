@@ -25,8 +25,8 @@ public class WorkerMain {
 
     public static void main(String[] args){
 
-        if(args.length != 5){
-            System.out.println("Usage: WorkerMain <worker_id> <in_queue_name> <out_queue_name> <manager_queue_name> <message_group_id>");
+        if(args.length != 4){
+            System.out.println("Usage: WorkerMain <worker_id> <in_queue_name> <out_queue_name> <manager_queue_name>");
             System.exit(1);
         }
 
@@ -34,7 +34,6 @@ public class WorkerMain {
         IN_QUEUE_URL = args[1];
         OUT_QUEUE_URL = args[2];
         MANAGER_QUEUE_URL = args[3];
-        MESSAGE_GROUP_ID = args[4];
 
         sqs = SqsClient.builder()
                 .region(Region.US_EAST_1)
@@ -88,8 +87,6 @@ public class WorkerMain {
                     sqs.sendMessage(SendMessageRequest.builder()
                             .queueUrl(OUT_QUEUE_URL)
                             .messageBody(output)
-                            .messageGroupId(MESSAGE_GROUP_ID)
-                            .messageDeduplicationId(getDeDupeId())
                             .build());
                 }
 
