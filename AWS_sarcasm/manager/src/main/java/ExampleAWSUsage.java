@@ -1,4 +1,5 @@
 
+import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.ec2.Ec2Client;
 import software.amazon.awssdk.services.ec2.model.*;
@@ -40,8 +41,7 @@ public class ExampleAWSUsage {
                 .region(ec2_region)
                 .build();
 
-//        createPublicBucketIfNotExists(BUCKET_NAME);
-
+//        createBucketIfNotExists(BUCKET_NAME);
 
         String queueName = "jobsQueue";
         CreateQueueRequest createQueueRequest = CreateQueueRequest.builder()
@@ -123,7 +123,7 @@ public class ExampleAWSUsage {
                 .minCount(1)
                 .userData(Base64.getEncoder().encodeToString(getUserDataScript().getBytes()))
                 .build();
-        ec2.runInstances(runRequest);
+//        ec2.runInstances(runRequest);
 
         DescribeInstancesRequest describeInstancesRequest = DescribeInstancesRequest.builder()
                 .filters(Filter.builder()
@@ -136,12 +136,12 @@ public class ExampleAWSUsage {
                                 .build())
                 .build();
 
-        var r = ec2.describeInstances(describeInstancesRequest);
-        for (var reservation : r.reservations()) {
-            for (var instance : reservation.instances()) {
-                System.out.println(instance.instanceId());
-            }
-        }
+//        var r = ec2.describeInstances(describeInstancesRequest);
+//        for (var reservation : r.reservations()) {
+//            for (var instance : reservation.instances()) {
+//                System.out.println(instance.instanceId());
+//            }
+//        }
 
     }
 
@@ -189,7 +189,7 @@ public class ExampleAWSUsage {
 
     }
 
-    public static void createPublicBucketIfNotExists(String bucketName) {
+    public static void createBucketIfNotExists(String bucketName) {
         try {
             // Create the bucket
             s3.createBucket(CreateBucketRequest
@@ -205,6 +205,20 @@ public class ExampleAWSUsage {
             s3.waiter().waitUntilBucketExists(HeadBucketRequest.builder()
                     .bucket(bucketName)
                     .build());
+
+            // create folder
+            s3.putObject(PutObjectRequest.builder()
+                            .bucket(bucketName)
+                            .key("files/")
+                            .build(),
+                    RequestBody.empty());
+
+            // create folder
+            s3.putObject(PutObjectRequest.builder()
+                            .bucket(bucketName)
+                            .key("files/errors/")
+                            .build(),
+                    RequestBody.empty());
 
         } catch (S3Exception e) {
             System.out.println(e.getMessage());

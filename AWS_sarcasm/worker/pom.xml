@@ -87,7 +87,7 @@
           </descriptorRefs>
           <archive>
             <manifest>
-              <mainClass>WorkerMain</mainClass>
+              <mainClass>mainWorkerClass</mainClass>
             </manifest>
           </archive>
         </configuration>

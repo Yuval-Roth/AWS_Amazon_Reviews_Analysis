@@ -12,14 +12,14 @@ import java.util.UUID;
 import java.util.concurrent.Semaphore;
 import java.util.stream.Collectors;
 
-public class WorkerMain {
+public class mainWorkerClass {
 
     private static SentimentAnalysisHandler sentimentAnalysisHandler;
     private static NamedEntityRecognitionHandler namedEntityRecognitionHandler;
     private static String IN_QUEUE_URL;
     private static String OUT_QUEUE_URL;
     private static String MANAGER_QUEUE_URL;
-    private static String BUCKET_URL;
+    private static String BUCKET_NAME;
     private static String WORKER_ID;
     private static SqsClient sqs;
     private static Semaphore managerQueueLock;
@@ -28,7 +28,7 @@ public class WorkerMain {
     public static void main(String[] args){
 
         if(args.length != 5){
-            System.out.println("Usage: WorkerMain <worker_id> <in_queue_name> <out_queue_name> <manager_queue_name>");
+            System.out.println("Usage: WorkerMain <worker_id> <in_queue_name> <out_queue_name> <manager_queue_name> <bucket_name>");
             System.exit(1);
         }
 
@@ -36,7 +36,7 @@ public class WorkerMain {
         IN_QUEUE_URL = args[1];
         OUT_QUEUE_URL = args[2];
         MANAGER_QUEUE_URL = args[3];
-        BUCKET_URL = args[4];
+        BUCKET_NAME = args[4];
 
         sqs = SqsClient.builder()
                 .region(Region.US_EAST_1)
@@ -184,7 +184,7 @@ public class WorkerMain {
         }
 
         String stackTrace = stackTraceToString(e);
-        String logName = "error_worker%s_%s.log".formatted(WORKER_ID, UUID.randomUUID());
+        String logName = "errors/error_worker%s_%s.log".formatted(WORKER_ID, UUID.randomUUID());
         uploadToS3(logName,stackTrace);
     }
 
@@ -194,8 +194,8 @@ public class WorkerMain {
                 .build();
 
         s3.putObject(PutObjectRequest.builder()
-                        .bucket(BUCKET_URL)
-                        .key(key).build(),
+                        .bucket(BUCKET_NAME)
+                        .key("files/"+key).build(),
                 RequestBody.fromString(content));
 
         s3.close();

@@ -117,7 +117,6 @@ public class ManagerMain {
                 exceptionHandler[0] = null;
             }
         }
-
     }
 
     private static void mainLoop(Exception[] exceptionHandler) {
@@ -152,7 +151,6 @@ public class ManagerMain {
                 try {
                     Thread.sleep(Math.max(0,(nextWakeup+randomTime) - System.currentTimeMillis()));
                 } catch (InterruptedException ignored) {}
-
 
             } catch (Exception e){
                 exceptionHandler[0] = e;
@@ -311,7 +309,7 @@ public class ManagerMain {
     private static void uploadToS3(String key, String content) {
         s3.putObject(PutObjectRequest.builder()
                     .bucket(BUCKET_NAME)
-                    .key(key).build(),
+                    .key("files/"+key).build(),
                 RequestBody.fromString(content));
     }
 
@@ -355,12 +353,13 @@ public class ManagerMain {
                 #!/bin/bash
                 mkdir /runtimedir
                 cd /runtimedir
-                java -Xmx4500m -Xms3750m -jar workerMain.jar %s %s %s %s > output.log 2>&1
+                java -Xmx4500m -Xms3750m -jar workerMain.jar %s %s %s %s %s > output.log 2>&1
                 sudo shutdown -h now""".formatted(
                 instanceIdCounter,
                 getQueueURL(WORKER_IN_QUEUE_NAME),
                 getQueueURL(WORKER_OUT_QUEUE_NAME),
-                getQueueURL(WORKER_MANAGEMENT_QUEUE_NAME)
+                getQueueURL(WORKER_MANAGEMENT_QUEUE_NAME),
+                BUCKET_NAME
         );
     }
 
@@ -384,6 +383,18 @@ public class ManagerMain {
             s3.waiter().waitUntilBucketExists(HeadBucketRequest.builder()
                     .bucket(bucketName)
                     .build());
+
+            // create folders
+            s3.putObject(PutObjectRequest.builder()
+                            .bucket(bucketName)
+                            .key("files/")
+                            .build(),
+                    RequestBody.empty());
+            s3.putObject(PutObjectRequest.builder()
+                            .bucket(bucketName)
+                            .key("files/errors/")
+                            .build(),
+                    RequestBody.empty());
         }
     }
 
@@ -496,7 +507,7 @@ public class ManagerMain {
         }
 
         String stackTrace = stackTraceToString(e);
-        String logName = "error_manager_%s.log".formatted(UUID.randomUUID());
+        String logName = "errors/error_manager_%s.log".formatted(UUID.randomUUID());
         uploadToS3(logName,stackTrace);
     }
 
