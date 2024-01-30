@@ -9,6 +9,7 @@ import software.amazon.awssdk.services.s3.model.*;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.*;
 
+import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.Semaphore;
 
@@ -174,12 +175,13 @@ public class ManagerMain {
                 // read message and create client request
                 ClientRequest clientRequest = JsonUtils.deserialize(message.body(), ClientRequest.class);
                 clientRequestIdToClientRequest.put(clientRequest.requestId(), clientRequest);
+                String input = downloadFromS3(clientRequest.input());
 
                 // Deserialize client request input and split to small TitleReviews
-                String[] jsons = clientRequest.input().split("\n");
+                String[] jsons = input.split("\n");
                 TitleReviews[] titleReviewsList = Arrays.stream(jsons)
-                        /*deserialize*/   .map(json -> JsonUtils.<TitleReviews>deserialize(json, TitleReviews.class))
-                        /*split*/   .flatMap(tr -> splitTitleReviews(tr, TR_JOB_SPLIT_SIZE).stream())
+      /*deserialize*/   .map(json -> JsonUtils.<TitleReviews>deserialize(json, TitleReviews.class))
+            /*split*/   .flatMap(tr -> splitTitleReviews(tr, TR_JOB_SPLIT_SIZE).stream())
                         .toArray(TitleReviews[]::new);
 
                 // split client request to jobs and send to workers
@@ -288,6 +290,24 @@ public class ManagerMain {
     // ============================================================================ |
     // ========================  AWS API FUNCTIONS  =============================== |
     // ============================================================================ |
+
+    private static String downloadFromS3(String key) {
+        var r = s3.getObject(GetObjectRequest.builder()
+                .bucket(BUCKET_NAME)
+                .key(key).build());
+
+        // get file from response
+        byte[] file = {};
+        try {
+            file = r.readAllBytes();
+        } catch (IOException e) {
+            handleException(e);
+        }
+
+        return new String(file);
+    }
+
+
     private static void stopWorkers(int count) {
         for(int i = 0; i < count; i++){
             Job stopJob = new Job(-1, Job.Action.SHUTDOWN, "");

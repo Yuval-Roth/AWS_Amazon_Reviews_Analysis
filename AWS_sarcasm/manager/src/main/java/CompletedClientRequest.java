@@ -1,1 +1,1 @@
-public record CompletedClientRequest(int requestId, String output){ }
+public record CompletedClientRequest(String clientId ,int requestId, String output){ }

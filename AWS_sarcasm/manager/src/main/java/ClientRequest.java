@@ -34,7 +34,7 @@ public record ClientRequest (String clientId,int requestId, String input, List<T
             throw new IllegalStateException("Cannot get completed request when not done");
         }
 
-        return new CompletedClientRequest(requestId, JsonUtils.serialize(output));
+        return new CompletedClientRequest(clientId,requestId, JsonUtils.serialize(output));
     }
 
 }
