@@ -520,9 +520,6 @@ public class ManagerMain {
 
         if(e instanceof TerminateException){
             stopWorkers(getWorkerCount());
-            try {
-                thread2.join();
-            } catch (InterruptedException ignored) {}
             waitUntilAllWorkersStopped();
             System.exit(0);
         }

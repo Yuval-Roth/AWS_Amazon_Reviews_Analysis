@@ -177,9 +177,6 @@ public class mainWorkerClass {
     private static void handleException(Exception e) {
 
         if(e instanceof TerminateException){
-            try {
-                thread2.join();
-            } catch (InterruptedException ignored) {}
             System.exit(0);
         }
 
