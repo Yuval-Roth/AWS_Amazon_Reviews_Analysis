@@ -351,7 +351,6 @@ public class ManagerMain {
 
         return """
                 #!/bin/bash
-                mkdir /runtimedir
                 cd /runtimedir
                 java -Xmx4500m -Xms3750m -jar workerMain.jar %s %s %s %s %s > output.log 2>&1
                 sudo shutdown -h now""".formatted(
@@ -503,12 +502,25 @@ public class ManagerMain {
             try {
                 thread2.join();
             } catch (InterruptedException ignored) {}
+            waitUntilAllWorkersStopped();
             System.exit(0);
         }
 
         String stackTrace = stackTraceToString(e);
         String logName = "errors/error_manager_%s.log".formatted(UUID.randomUUID());
         uploadToS3(logName,stackTrace);
+    }
+
+    private static void waitUntilAllWorkersStopped() {
+        while(true){
+            if (getWorkerCount() != 0){
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException ignored) {}
+            } else {
+                return;
+            }
+        }
     }
 
     private static String stackTraceToString(Exception e) {
