@@ -175,10 +175,14 @@ public class ManagerMain {
 
                     // map job id to client request id
                     jobIdToClientRequestId.put(job.jobId(),clientRequest.requestId());
+                    clientRequest.incrementNumJobs();
 
                     // send job to worker
                     sendToQueue(WORKER_IN_QUEUE_NAME, messageBody);
                 }
+
+                // delete message from queue
+                deleteFromQueue(message, USER_INPUT_QUEUE_NAME);
             }
         }
     }
@@ -235,10 +239,7 @@ public class ManagerMain {
                 }
 
                 // delete message from queue
-                sqs.deleteMessage(software.amazon.awssdk.services.sqs.model.DeleteMessageRequest.builder()
-                        .queueUrl(getQueueURL(WORKER_OUT_QUEUE_NAME))
-                        .receiptHandle(message.receiptHandle())
-                        .build());
+                deleteFromQueue(message, WORKER_OUT_QUEUE_NAME);
             }
 
             // send completed client requests to users
@@ -265,10 +266,10 @@ public class ManagerMain {
     }
 
 
+
     // ============================================================================ |
     // ========================  AWS API FUNCTIONS  =============================== |
     // ============================================================================ |
-
     private static void stopWorkers(int count) {
         for(int i = 0; i < count; i++){
             Job stopJob = new Job(-1, Job.Action.SHUTDOWN, "");
@@ -383,6 +384,13 @@ public class ManagerMain {
                     .messageGroupId(messageGroupId);
         }
         sqs.sendMessage(builder.build());
+    }
+
+    private static void deleteFromQueue(Message message, String queueName) {
+        sqs.deleteMessage(DeleteMessageRequest.builder()
+                .queueUrl(getQueueURL(queueName))
+                .receiptHandle(message.receiptHandle())
+                .build());
     }
     private static int getWorkerCount() {
         return (int) ec2.describeInstances().reservations().stream()
