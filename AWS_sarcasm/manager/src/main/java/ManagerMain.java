@@ -1,5 +1,4 @@
 
-import org.apache.commons.lang3.NotImplementedException;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.ec2.Ec2Client;
@@ -14,12 +13,12 @@ import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class ManagerMain {
 
     // <S3>
     public static final String BUCKET_NAME = "distributed-systems-2024-bucket-yuval-adi";
-    private static final int TR_JOB_SPLIT_SIZE = 5;
     private static S3Client s3;
     // </S3>
 
@@ -60,6 +59,7 @@ public class ManagerMain {
     private static volatile long nextWorkerCountCheck;
     private static AtomicBoolean shouldTerminate;
     private static Thread thread2;
+    private static AtomicInteger requiredWorkers;
     // </APPLICATION DATA>
 
 
@@ -89,6 +89,7 @@ public class ManagerMain {
         clientRequestsLock = new Semaphore(1);
         workerCountLock = new Semaphore(1);
         shouldTerminate = new AtomicBoolean(false);
+        requiredWorkers = new AtomicInteger(0);
 
         createBucketIfNotExists(BUCKET_NAME);
         createQueueIfNotExists(WORKER_IN_QUEUE_NAME);
@@ -185,13 +186,22 @@ public class ManagerMain {
 
                 // Deserialize client request fileName and split to small TitleReviews
                 String[] jsons = input.split("\n");
-                TitleReviews[] titleReviewsList = Arrays.stream(jsons)
-      /*deserialize*/   .map(json -> JsonUtils.<TitleReviews>deserialize(json, TitleReviews.class))
-            /*split*/   .flatMap(tr -> splitTitleReviews(tr, clientRequest.reviewsPerWorker()).stream())
-                        .toArray(TitleReviews[]::new);
+                List<TitleReviews> largeTitleReviewsList = new LinkedList<>();
+                int reviewsCount = 0;
+                for (String json : jsons) {
+                    TitleReviews tr = JsonUtils.deserialize(json, TitleReviews.class);
+                    reviewsCount += addTitleReviews(tr, largeTitleReviewsList);
+                }
+                List<TitleReviews> smallTitleReviewsList = largeTitleReviewsList.stream()
+                        .flatMap(tr -> splitTitleReviews(tr, clientRequest.reviewsPerWorker()).stream())
+                        .toList();
+
+                // set reviews count in client request and add to required workers
+                clientRequest.setReviewsCount(reviewsCount);
+                addToAtomicInteger(clientRequest.requiredWorkers());
 
                 // split client request to jobs and send to workers
-                for (TitleReviews tr : titleReviewsList) {
+                for (TitleReviews tr : smallTitleReviewsList) {
 
                     // create job and increment job id
                     String jsonJob = JsonUtils.serialize(tr);
@@ -205,10 +215,11 @@ public class ManagerMain {
                     // send job to worker
                     sendToQueue(WORKER_IN_QUEUE_NAME, messageBody);
                 }
-
+                
                 // delete message from queue
                 deleteFromQueue(message, USER_INPUT_QUEUE_NAME);
             }
+            balanceWorkerCount();
         }
     }
 
@@ -260,12 +271,16 @@ public class ManagerMain {
 
                         // mark client request as done
                         clientRequestIdToClientRequest.remove(clientRequestId);
+
+                        // decrement required workers
+                        addToAtomicInteger(-clientRequest.requiredWorkers());
                     }
                 }
 
                 // delete message from queue
                 deleteFromQueue(message, WORKER_OUT_QUEUE_NAME);
             }
+            balanceWorkerCount();
         }
 
         if(shouldTerminate.get() && clientRequestIdToClientRequest.isEmpty()){
@@ -273,11 +288,22 @@ public class ManagerMain {
         }
     }
 
+    private static void addToAtomicInteger(int num) {
+        int currentRequiredWorkers;
+        int newRequiredWorkers;
+        do{
+            currentRequiredWorkers = requiredWorkers.get();
+            newRequiredWorkers = currentRequiredWorkers + num;
+        } while (requiredWorkers.compareAndSet(currentRequiredWorkers, newRequiredWorkers));
+    }
+
     private static void balanceWorkerCount() {
+        
+        if(debugMode) return;
 
         // get number of workers
         int workerCount = getWorkerCount();
-        int requiredWorkerCount = Math.min(MAX_WORKERS,getRequiredWorkerCount());
+        int requiredWorkerCount = Math.min(MAX_WORKERS,requiredWorkers.get());
 
         if(workerCount < requiredWorkerCount){
             startWorkers(requiredWorkerCount - workerCount);
@@ -456,19 +482,14 @@ public class ManagerMain {
                         .noneMatch(tag -> tag.key().equals("Name") && tag.value().equals("ManagerInstance")))
                 .count();
     }
-
-    private static int getRequiredWorkerCount() {
-        //TODO: implement
-        throw new NotImplementedException("getRequiredWorkerCount not implemented");
-    }
-
-
+    
     // ============================================================================ |
     // ========================  UTILITY FUNCTIONS  =============================== |
     // ============================================================================ |
 
 
-    private static List<TitleReviews> splitTitleReviews(TitleReviews tr,int splitSize) {
+    private static List<TitleReviews> splitTitleReviews(TitleReviews tr, int splitSize) {
+
         List<TitleReviews> smallTitleReviewsList = new LinkedList<>(); //will hold all title Reviews with 5 reviews
         int counterReviews = 0;
         List<Review> tempList = new LinkedList<>();
@@ -521,6 +542,18 @@ public class ManagerMain {
                 return;
             }
         }
+    }
+
+    public static int addTitleReviews(TitleReviews tr, List<TitleReviews> list){
+        int reviewsCount = tr.reviews().size();
+        for(TitleReviews o : list){
+            if(o.title().equals(tr.title())){
+                o.reviews().addAll(tr.reviews());
+                return reviewsCount;
+            }
+        }
+        list.add(tr);
+        return reviewsCount;
     }
 
     private static String stackTraceToString(Exception e) {

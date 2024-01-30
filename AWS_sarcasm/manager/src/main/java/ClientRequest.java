@@ -8,10 +8,11 @@ public record ClientRequest (
         int reviewsPerWorker,
         boolean terminate,
         List<TitleReviews> output,
-        Integer[] numJobs
+        Integer[] numJobs,
+        Integer[] reviewsCount
         ){
     public ClientRequest(String clientId, int requestId, String fileName, int reviewsPerWorker, boolean terminate){
-        this(clientId, requestId, fileName, reviewsPerWorker, terminate,new LinkedList<>(), new Integer[]{0});
+        this(clientId, requestId, fileName, reviewsPerWorker, terminate,new LinkedList<>(), new Integer[]{0},new Integer[]{0});
     }
 
     public void addTitleReviews(TitleReviews tr){
@@ -42,6 +43,14 @@ public record ClientRequest (
         }
         sb.deleteCharAt(sb.length()-1); // remove last newline
         return sb.toString();
+    }
+
+    public int requiredWorkers(){
+        return (int) Math.ceil((double) output.size() / reviewsPerWorker);
+    }
+
+    public void setReviewsCount(int reviewsCount){
+        this.reviewsCount[0] = reviewsCount;
     }
 
     public CompletedClientRequest getCompletedRequest(String fileName) {
