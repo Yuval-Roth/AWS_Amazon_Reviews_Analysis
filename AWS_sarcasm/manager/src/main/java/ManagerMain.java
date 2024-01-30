@@ -152,7 +152,7 @@ public class ManagerMain {
     private static void stopWorkers(int count) {
         for(int i = 0; i < count; i++){
             Job stopJob = new Job(-1, Job.Action.SHUTDOWN, "");
-            sendToQueue(getQueueURL(WORKER_MANAGEMENT_QUEUE_NAME), JsonUtils.serialize(stopJob), WORKER_MESSAGE_GROUP_ID);
+            sendToQueue(WORKER_MANAGEMENT_QUEUE_NAME, JsonUtils.serialize(stopJob), WORKER_MESSAGE_GROUP_ID);
         }
     }
 
@@ -248,7 +248,6 @@ public class ManagerMain {
     private static void checkForClientRequests() {
 
         ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
-                .maxNumberOfMessages(1)
                 .queueUrl(getQueueURL(USER_INPUT_QUEUE_NAME))
                 .build();
 
@@ -256,31 +255,33 @@ public class ManagerMain {
         
         if(r.hasMessages()){
 
-            // read message and create client request
-            String message = r.messages().getFirst().body();
-            ClientRequest clientRequest = JsonUtils.deserialize(message, ClientRequest.class);
-            clientRequestIdToClientRequest.put(clientRequest.requestId(), clientRequest);
+            for(var message : r.messages()) {
 
-            // Deserialize client request input and split to small TitleReviews
-            String[] jsons = clientRequest.input().split("\n");
-            TitleReviews[] titleReviewsList = Arrays.stream(jsons)
-  /*deserialize*/   .map(json -> JsonUtils.<TitleReviews>deserialize(json, TitleReviews.class))
-        /*split*/   .flatMap(tr -> splitTitleReviews(tr, TR_JOB_SPLIT_SIZE).stream())
-                    .toArray(TitleReviews[]::new);
+                // read message and create client request
+                ClientRequest clientRequest = JsonUtils.deserialize(message.body(), ClientRequest.class);
+                clientRequestIdToClientRequest.put(clientRequest.requestId(), clientRequest);
 
-            // split client request to jobs and send to workers
-            for (TitleReviews tr : titleReviewsList) {
+                // Deserialize client request input and split to small TitleReviews
+                String[] jsons = clientRequest.input().split("\n");
+                TitleReviews[] titleReviewsList = Arrays.stream(jsons)
+                        /*deserialize*/   .map(json -> JsonUtils.<TitleReviews>deserialize(json, TitleReviews.class))
+                        /*split*/   .flatMap(tr -> splitTitleReviews(tr, TR_JOB_SPLIT_SIZE).stream())
+                        .toArray(TitleReviews[]::new);
 
-                // create job and increment job id
-                String jsonJob = JsonUtils.serialize(tr);
-                Job job = new Job(jobIdCounter++, Job.Action.PROCESS, jsonJob);
-                String messageBody = JsonUtils.serialize(job);
+                // split client request to jobs and send to workers
+                for (TitleReviews tr : titleReviewsList) {
 
-                // map job id to client request id
-                jobIdToClientRequestId.put(job.jobId(),clientRequest.requestId());
+                    // create job and increment job id
+                    String jsonJob = JsonUtils.serialize(tr);
+                    Job job = new Job(jobIdCounter++, Job.Action.PROCESS, jsonJob);
+                    String messageBody = JsonUtils.serialize(job);
 
-                // send job to worker
-                sendToQueue(getQueueURL(WORKER_IN_QUEUE_NAME), messageBody);
+                    // map job id to client request id
+                    jobIdToClientRequestId.put(job.jobId(),clientRequest.requestId());
+
+                    // send job to worker
+                    sendToQueue(WORKER_IN_QUEUE_NAME, messageBody);
+                }
             }
         }
     }
@@ -304,13 +305,13 @@ public class ManagerMain {
         return smallTitleReviewsList;
     }
 
-    private static void sendToQueue(String queueURL, String messageBody) {
-        sendToQueue(queueURL, messageBody, null);
+    private static void sendToQueue(String queueName, String messageBody) {
+        sendToQueue(queueName, messageBody, null);
     }
 
-    private static void sendToQueue(String queueURL, String messageBody, String messageGroupId) {
+    private static void sendToQueue(String queueName, String messageBody, String messageGroupId) {
         SendMessageRequest.Builder builder = SendMessageRequest.builder()
-                .queueUrl(queueURL)
+                .queueUrl(getQueueURL(queueName))
                 .messageBody(messageBody);
 
         if(messageGroupId != null){
