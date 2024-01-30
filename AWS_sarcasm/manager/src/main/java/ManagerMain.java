@@ -52,6 +52,9 @@ public class ManagerMain {
     private static Semaphore clientRequestsLock;
     private static Semaphore workerCountLock;
     private static volatile boolean debugMode;
+    private static volatile long nextClientRequestCheck;
+    private static volatile long nextCompletedJobCheck;
+    private static volatile long nextWorkerCountCheck;
     // </APPLICATION DATA>
 
 
@@ -91,6 +94,10 @@ public class ManagerMain {
 
         final Exception[] exceptionHandler = new Exception[1];
 
+        nextClientRequestCheck = System.currentTimeMillis();
+        nextCompletedJobCheck = System.currentTimeMillis();
+        nextWorkerCountCheck = System.currentTimeMillis();
+
         while(true){
             Thread t = new Thread(()-> mainLoop(exceptionHandler));
             t.start();
@@ -109,35 +116,35 @@ public class ManagerMain {
 
     private static void mainLoop(Exception[] exceptionHandler) {
 
-
-        //TODO: implement wake up timers
-        long nextClientRequestCheck = System.currentTimeMillis();
-        long nextCompletedJobCheck = System.currentTimeMillis();
-        long nextWorkerCountCheck = System.currentTimeMillis();
-        long nextWakeup;
-
+        Random rand = new Random();
         while(exceptionHandler[0] == null){
             try{
 
-                if(clientRequestsLock.tryAcquire()) {
+                if(System.currentTimeMillis() >= nextClientRequestCheck && clientRequestsLock.tryAcquire()) {
                     checkForClientRequests();
+                    nextClientRequestCheck = System.currentTimeMillis() + 1000;
                     clientRequestsLock.release();
                 }
 
-                if(completedJobsLock.tryAcquire()) {
+                if(System.currentTimeMillis() >= nextCompletedJobCheck && completedJobsLock.tryAcquire()) {
                     checkForCompletedJobs();
+                    nextCompletedJobCheck = System.currentTimeMillis() + 1000;
                     completedJobsLock.release();
                 }
 
                 if(! debugMode){
-                    if(workerCountLock.tryAcquire()) {
+                    if(System.currentTimeMillis() >= nextWorkerCountCheck && workerCountLock.tryAcquire()) {
                         balanceWorkerCount();
                     }
+                    nextWorkerCountCheck = System.currentTimeMillis() + 5000;
                     workerCountLock.release();
                 }
 
+                long nextWakeup = Math.min(Math.min(nextClientRequestCheck, nextCompletedJobCheck), nextWorkerCountCheck);
+                int randomTime = rand.nextInt(0,20);
+
                 try {
-                    Thread.sleep(1000);
+                    Thread.sleep(Math.max(0,(nextWakeup+randomTime) - System.currentTimeMillis()));
                 } catch (InterruptedException ignored) {}
 
 
