@@ -42,6 +42,7 @@ public class ManagerMain {
     private static SqsClient sqs;
     // </SQS>
 
+    // <APPLICATION DATA>
     private static final Region ec2_region = Region.US_EAST_1;
     private static final Region s3_region = Region.US_WEST_2;
     private static int jobIdCounter;
@@ -51,6 +52,7 @@ public class ManagerMain {
     private static Semaphore clientRequestsLock;
     private static Semaphore workerCountLock;
     private static boolean debugMode;
+    // </APPLICATION DATA>
 
 
     public static void main(String[] args) {
@@ -136,45 +138,49 @@ public class ManagerMain {
         }
     }
 
-    private static void balanceWorkerCount() {
+    // ============================================================================ |
+    // ========================  MAIN FLOW FUNCTIONS  ============================= |
+    // ============================================================================ |
 
-        // get number of workers
-        int workerCount = getWorkerCount();
-        int requiredWorkerCount = Math.min(MAX_WORKERS,getRequiredWorkerCount());
+    private static void checkForClientRequests() {
 
-        if(workerCount < requiredWorkerCount){
-            startWorkers(requiredWorkerCount - workerCount);
-        } else if(workerCount > requiredWorkerCount){
-            stopWorkers(workerCount - requiredWorkerCount);
+        ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
+                .queueUrl(getQueueURL(USER_INPUT_QUEUE_NAME))
+                .build();
+
+        var r = sqs.receiveMessage(messageRequest);
+
+        if(r.hasMessages()){
+
+            for(var message : r.messages()) {
+
+                // read message and create client request
+                ClientRequest clientRequest = JsonUtils.deserialize(message.body(), ClientRequest.class);
+                clientRequestIdToClientRequest.put(clientRequest.requestId(), clientRequest);
+
+                // Deserialize client request input and split to small TitleReviews
+                String[] jsons = clientRequest.input().split("\n");
+                TitleReviews[] titleReviewsList = Arrays.stream(jsons)
+                        /*deserialize*/   .map(json -> JsonUtils.<TitleReviews>deserialize(json, TitleReviews.class))
+                        /*split*/   .flatMap(tr -> splitTitleReviews(tr, TR_JOB_SPLIT_SIZE).stream())
+                        .toArray(TitleReviews[]::new);
+
+                // split client request to jobs and send to workers
+                for (TitleReviews tr : titleReviewsList) {
+
+                    // create job and increment job id
+                    String jsonJob = JsonUtils.serialize(tr);
+                    Job job = new Job(jobIdCounter++, Job.Action.PROCESS, jsonJob);
+                    String messageBody = JsonUtils.serialize(job);
+
+                    // map job id to client request id
+                    jobIdToClientRequestId.put(job.jobId(),clientRequest.requestId());
+
+                    // send job to worker
+                    sendToQueue(WORKER_IN_QUEUE_NAME, messageBody);
+                }
+            }
         }
-    }
-
-    private static void stopWorkers(int count) {
-        for(int i = 0; i < count; i++){
-            Job stopJob = new Job(-1, Job.Action.SHUTDOWN, "");
-            sendToQueue(WORKER_MANAGEMENT_QUEUE_NAME, JsonUtils.serialize(stopJob), WORKER_MESSAGE_GROUP_ID);
-        }
-    }
-
-    private static int getRequiredWorkerCount() {
-        //TODO: implement
-        throw new NotImplementedException("getRequiredWorkerCount not implemented");
-    }
-
-    private static int getWorkerCount() {
-        return (int) ec2.describeInstances().reservations().stream()
-                .flatMap(reservation -> reservation.instances().stream())
-                .filter(instance -> ! instance.state().name().equals(InstanceStateName.TERMINATED))
-                .filter(instance -> instance.tags().stream()
-                        .noneMatch(tag -> tag.key().equals("Name") && tag.value().equals("ManagerInstance")))
-                .count();
-    }
-
-    private static void handleException(Exception e) {
-
-        //TODO: make a more robust exception handling
-        e.printStackTrace();
-
     }
 
     private static void checkForCompletedJobs(){
@@ -220,7 +226,7 @@ public class ManagerMain {
                         CompletedClientRequest completedClientRequest = clientRequest.getCompletedRequest();
                         String messageBody = JsonUtils.serialize(completedClientRequest);
                         messagesToSend.add(SendMessageBatchRequestEntry.builder()
-                                        .messageBody(messageBody)
+                                .messageBody(messageBody)
                                 .build());
 
                         // remove client request
@@ -245,85 +251,29 @@ public class ManagerMain {
         }
     }
 
-    private static void checkForClientRequests() {
+    private static void balanceWorkerCount() {
 
-        ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
-                .queueUrl(getQueueURL(USER_INPUT_QUEUE_NAME))
-                .build();
+        // get number of workers
+        int workerCount = getWorkerCount();
+        int requiredWorkerCount = Math.min(MAX_WORKERS,getRequiredWorkerCount());
 
-        var r = sqs.receiveMessage(messageRequest);
-        
-        if(r.hasMessages()){
-
-            for(var message : r.messages()) {
-
-                // read message and create client request
-                ClientRequest clientRequest = JsonUtils.deserialize(message.body(), ClientRequest.class);
-                clientRequestIdToClientRequest.put(clientRequest.requestId(), clientRequest);
-
-                // Deserialize client request input and split to small TitleReviews
-                String[] jsons = clientRequest.input().split("\n");
-                TitleReviews[] titleReviewsList = Arrays.stream(jsons)
-                        /*deserialize*/   .map(json -> JsonUtils.<TitleReviews>deserialize(json, TitleReviews.class))
-                        /*split*/   .flatMap(tr -> splitTitleReviews(tr, TR_JOB_SPLIT_SIZE).stream())
-                        .toArray(TitleReviews[]::new);
-
-                // split client request to jobs and send to workers
-                for (TitleReviews tr : titleReviewsList) {
-
-                    // create job and increment job id
-                    String jsonJob = JsonUtils.serialize(tr);
-                    Job job = new Job(jobIdCounter++, Job.Action.PROCESS, jsonJob);
-                    String messageBody = JsonUtils.serialize(job);
-
-                    // map job id to client request id
-                    jobIdToClientRequestId.put(job.jobId(),clientRequest.requestId());
-
-                    // send job to worker
-                    sendToQueue(WORKER_IN_QUEUE_NAME, messageBody);
-                }
-            }
+        if(workerCount < requiredWorkerCount){
+            startWorkers(requiredWorkerCount - workerCount);
+        } else if(workerCount > requiredWorkerCount){
+            stopWorkers(workerCount - requiredWorkerCount);
         }
     }
 
-    private static List<TitleReviews> splitTitleReviews(TitleReviews tr,int splitSize) {
-        List<TitleReviews> smallTitleReviewsList = new LinkedList<>(); //will hold all title Reviews with 5 reviews
-        int counterReviews = 0;
-        List<Review> tempList = new LinkedList<>();
-        TitleReviews smallTr = new TitleReviews(tr.title(), tempList);
-        for (Review rev : tr.reviews()) {
-            if (counterReviews < splitSize) {
-                tempList.add(rev);
-                counterReviews++;
-            } else { //counterReview == splitSize
-                smallTitleReviewsList.add(smallTr);
-                tempList = new LinkedList<>();
-                smallTr = new TitleReviews(tr.title(), tempList);
-                counterReviews = 0;
-            }
+
+    // ============================================================================ |
+    // ========================  AWS API FUNCTIONS  =============================== |
+    // ============================================================================ |
+
+    private static void stopWorkers(int count) {
+        for(int i = 0; i < count; i++){
+            Job stopJob = new Job(-1, Job.Action.SHUTDOWN, "");
+            sendToQueue(WORKER_MANAGEMENT_QUEUE_NAME, JsonUtils.serialize(stopJob), WORKER_MESSAGE_GROUP_ID);
         }
-        return smallTitleReviewsList;
-    }
-
-    private static void sendToQueue(String queueName, String messageBody) {
-        sendToQueue(queueName, messageBody, null);
-    }
-
-    private static void sendToQueue(String queueName, String messageBody, String messageGroupId) {
-        SendMessageRequest.Builder builder = SendMessageRequest.builder()
-                .queueUrl(getQueueURL(queueName))
-                .messageBody(messageBody);
-
-        if(messageGroupId != null){
-            builder
-                    .messageDeduplicationId(getDeDupeId())
-                    .messageGroupId(messageGroupId);
-        }
-        sqs.sendMessage(builder.build());
-    }
-
-    private static String getDeDupeId(){
-        return "%s-%s-%s".formatted(MANAGER_ID,Thread.currentThread().getName(),UUID.randomUUID());
     }
 
     private static void startWorkers(int count) {
@@ -354,24 +304,17 @@ public class ManagerMain {
 
     private static String getUserDataScript() {
 
-        String workerJarUri = "s3://" + BUCKET_NAME + "/workerMain.jar";
-
         return """
                 #!/bin/bash
                 mkdir /runtimedir
                 cd /runtimedir
                 java -Xmx4500m -Xms3750m -jar workerMain.jar %s %s %s %s > output.log 2>&1
                 sudo shutdown -h now""".formatted(
-                        instanceIdCounter,
-                        getQueueURL(WORKER_IN_QUEUE_NAME),
-                        getQueueURL(WORKER_OUT_QUEUE_NAME),
-                        getQueueURL(WORKER_MANAGEMENT_QUEUE_NAME)
-                );
-
-    }
-
-    private static String getQueueURL(String queueName){
-        return SQS_DOMAIN_PREFIX + queueName;
+                instanceIdCounter,
+                getQueueURL(WORKER_IN_QUEUE_NAME),
+                getQueueURL(WORKER_OUT_QUEUE_NAME),
+                getQueueURL(WORKER_MANAGEMENT_QUEUE_NAME)
+        );
     }
 
     private static void createBucketIfNotExists(String bucketName){
@@ -404,8 +347,8 @@ public class ManagerMain {
     private static void createQueueIfNotExists(String queueName, Integer visibilityTimeout){
 
         boolean queueExists = sqs.listQueues(ListQueuesRequest.builder()
-                        .queueNamePrefix(queueName)
-                        .build()).hasQueueUrls();
+                .queueNamePrefix(queueName)
+                .build()).hasQueueUrls();
 
         if(! queueExists){
             CreateQueueRequest createQueueRequest = CreateQueueRequest.builder()
@@ -425,6 +368,75 @@ public class ManagerMain {
         }
     }
 
+    private static void sendToQueue(String queueName, String messageBody) {
+        sendToQueue(queueName, messageBody, null);
+    }
+
+    private static void sendToQueue(String queueName, String messageBody, String messageGroupId) {
+        SendMessageRequest.Builder builder = SendMessageRequest.builder()
+                .queueUrl(getQueueURL(queueName))
+                .messageBody(messageBody);
+
+        if(messageGroupId != null){
+            builder
+                    .messageDeduplicationId(getDeDupeId())
+                    .messageGroupId(messageGroupId);
+        }
+        sqs.sendMessage(builder.build());
+    }
+    private static int getWorkerCount() {
+        return (int) ec2.describeInstances().reservations().stream()
+                .flatMap(reservation -> reservation.instances().stream())
+                .filter(instance -> ! instance.state().name().equals(InstanceStateName.TERMINATED))
+                .filter(instance -> instance.tags().stream()
+                        .noneMatch(tag -> tag.key().equals("Name") && tag.value().equals("ManagerInstance")))
+                .count();
+    }
+
+    private static int getRequiredWorkerCount() {
+        //TODO: implement
+        throw new NotImplementedException("getRequiredWorkerCount not implemented");
+    }
+
+
+    // ============================================================================ |
+    // ========================  UTILITY FUNCTIONS  =============================== |
+    // ============================================================================ |
+
+
+    private static List<TitleReviews> splitTitleReviews(TitleReviews tr,int splitSize) {
+        List<TitleReviews> smallTitleReviewsList = new LinkedList<>(); //will hold all title Reviews with 5 reviews
+        int counterReviews = 0;
+        List<Review> tempList = new LinkedList<>();
+        TitleReviews smallTr = new TitleReviews(tr.title(), tempList);
+        for (Review rev : tr.reviews()) {
+            if (counterReviews < splitSize) {
+                tempList.add(rev);
+                counterReviews++;
+            } else { //counterReview == splitSize
+                smallTitleReviewsList.add(smallTr);
+                tempList = new LinkedList<>();
+                smallTr = new TitleReviews(tr.title(), tempList);
+                counterReviews = 0;
+            }
+        }
+        return smallTitleReviewsList;
+    }
+
+    private static String getQueueURL(String queueName){
+        return SQS_DOMAIN_PREFIX + queueName;
+    }
+
+    private static String getDeDupeId(){
+        return "%s-%s-%s".formatted(MANAGER_ID,Thread.currentThread().getName(),UUID.randomUUID());
+    }
+
+    private static void handleException(Exception e) {
+
+        //TODO: make a more robust exception handling
+        e.printStackTrace();
+
+    }
 }
 
 
