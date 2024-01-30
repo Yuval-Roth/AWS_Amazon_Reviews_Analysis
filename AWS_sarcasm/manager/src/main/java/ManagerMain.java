@@ -109,21 +109,31 @@ public class ManagerMain {
 
     private static void mainLoop(Exception[] exceptionHandler) {
 
+
+        //TODO: implement wake up timers
+        long nextClientRequestCheck = System.currentTimeMillis();
+        long nextCompletedJobCheck = System.currentTimeMillis();
+        long nextWorkerCountCheck = System.currentTimeMillis();
+        long nextWakeup;
+
         while(exceptionHandler[0] == null){
             try{
 
                 if(clientRequestsLock.tryAcquire()) {
                     checkForClientRequests();
+                    clientRequestsLock.release();
                 }
 
                 if(completedJobsLock.tryAcquire()) {
                     checkForCompletedJobs();
+                    completedJobsLock.release();
                 }
 
                 if(! debugMode){
                     if(workerCountLock.tryAcquire()) {
                         balanceWorkerCount();
                     }
+                    workerCountLock.release();
                 }
 
                 try {
