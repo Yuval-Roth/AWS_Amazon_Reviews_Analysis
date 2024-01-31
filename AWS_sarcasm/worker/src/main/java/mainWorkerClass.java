@@ -28,7 +28,7 @@ public class mainWorkerClass {
     public static void main(String[] args){
 
         if(args.length != 5){
-            System.out.println("Usage: WorkerMain <worker_id> <in_queue_name> <out_queue_name> <manager_queue_name> <bucket_name>");
+            System.out.println("Usage: WorkerMain <worker_id> <in_queue_url> <out_queue_url> <manager_queue_url> <bucket_url>");
             System.exit(1);
         }
 
@@ -79,7 +79,7 @@ public class mainWorkerClass {
                 .build();
 
         // Main loop
-        while(exceptionHandler[0] != null){
+        while(exceptionHandler[0] == null){
             try{
                 // Receive message from in queue
                 var request = sqs.receiveMessage(messageRequest);
@@ -107,7 +107,7 @@ public class mainWorkerClass {
                             .build());
 
                 } else {
-                    if(exceptionHandler[0] != null){
+                    if(exceptionHandler[0] == null){
                         try {
                             Thread.sleep(1000);
                         } catch (InterruptedException e) {

@@ -98,6 +98,7 @@ public class ManagerMain {
         createQueueIfNotExists(USER_INPUT_QUEUE_NAME);
         createQueueIfNotExists(USER_OUTPUT_QUEUE_NAME, 0);
 
+        //TODO: wait until all queues are created before continuing
 
         final Exception[] exceptionHandler = new Exception[1];
 
@@ -106,7 +107,7 @@ public class ManagerMain {
         nextWorkerCountCheck = System.currentTimeMillis();
 
         while(true){
-            thread2 = new Thread(()-> mainLoop(exceptionHandler));
+            thread2 = new Thread(()-> mainLoop(exceptionHandler),"Thread2");
             thread2.start();
             mainLoop(exceptionHandler);
 
@@ -138,10 +139,8 @@ public class ManagerMain {
                     completedJobsLock.release();
                 }
 
-                if(! debugMode){
-                    if(System.currentTimeMillis() >= nextWorkerCountCheck && workerCountLock.tryAcquire()) {
-                        balanceWorkerCount();
-                    }
+                if(System.currentTimeMillis() >= nextWorkerCountCheck && workerCountLock.tryAcquire()) {
+                    balanceWorkerCount();
                     nextWorkerCountCheck = System.currentTimeMillis() + 5000;
                     workerCountLock.release();
                 }
@@ -294,7 +293,7 @@ public class ManagerMain {
         do{
             currentRequiredWorkers = requiredWorkers.get();
             newRequiredWorkers = currentRequiredWorkers + num;
-        } while (requiredWorkers.compareAndSet(currentRequiredWorkers, newRequiredWorkers));
+        } while (! requiredWorkers.compareAndSet(currentRequiredWorkers, newRequiredWorkers));
     }
 
     private static void balanceWorkerCount() {
@@ -319,7 +318,7 @@ public class ManagerMain {
     private static String downloadFromS3(String key) {
         var r = s3.getObject(GetObjectRequest.builder()
                 .bucket(BUCKET_NAME)
-                .key(key).build());
+                .key("files/"+key).build());
 
         // get file from response
         byte[] file = {};
@@ -493,17 +492,18 @@ public class ManagerMain {
         List<TitleReviews> smallTitleReviewsList = new LinkedList<>(); //will hold all title Reviews with 5 reviews
         int counterReviews = 0;
         List<Review> tempList = new LinkedList<>();
-        TitleReviews smallTr = new TitleReviews(tr.title(), tempList);
         for (Review rev : tr.reviews()) {
             if (counterReviews < splitSize) {
                 tempList.add(rev);
                 counterReviews++;
             } else { //counterReview == splitSize
-                smallTitleReviewsList.add(smallTr);
+                smallTitleReviewsList.add(new TitleReviews(tr.title(), tempList));
                 tempList = new LinkedList<>();
-                smallTr = new TitleReviews(tr.title(), tempList);
                 counterReviews = 0;
             }
+        }
+        if(counterReviews != 0){
+            smallTitleReviewsList.add(new TitleReviews(tr.title(), tempList));
         }
         return smallTitleReviewsList;
     }
@@ -523,6 +523,11 @@ public class ManagerMain {
             waitUntilAllWorkersStopped();
             System.exit(0);
         }
+
+        //release all locks
+        completedJobsLock.release();
+        clientRequestsLock.release();
+        workerCountLock.release();
 
         String stackTrace = stackTraceToString(e);
         String logName = "errors/error_manager_%s.log".formatted(UUID.randomUUID());
