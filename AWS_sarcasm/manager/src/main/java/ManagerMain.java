@@ -486,23 +486,18 @@ public class ManagerMain {
     // ========================  UTILITY FUNCTIONS  =============================== |
     // ============================================================================ |
 
-
     private static List<TitleReviews> splitTitleReviews(TitleReviews tr, int splitSize) {
 
         List<TitleReviews> smallTitleReviewsList = new LinkedList<>(); //will hold all title Reviews with 5 reviews
-        int counterReviews = 0;
         List<Review> tempList = new LinkedList<>();
         for (Review rev : tr.reviews()) {
-            if (counterReviews < splitSize) {
-                tempList.add(rev);
-                counterReviews++;
-            } else { //counterReview == splitSize
+            tempList.add(rev);
+            if (tempList.size() == splitSize) { //counterReview == splitSize
                 smallTitleReviewsList.add(new TitleReviews(tr.title(), tempList));
                 tempList = new LinkedList<>();
-                counterReviews = 0;
             }
         }
-        if(counterReviews != 0){
+        if(! tempList.isEmpty()){
             smallTitleReviewsList.add(new TitleReviews(tr.title(), tempList));
         }
         return smallTitleReviewsList;
