@@ -91,7 +91,7 @@ public class mainWorkerClass {
                     if(job.action() == Job.Action.PROCESS) {
 
                         // Process message and send to out queue
-                        String output = processMessage(job.input());
+                        String output = processMessage(job.data());
                         Job doneJob = new Job(job.jobId(), Job.Action.DONE, output);
 
                         sqs.sendMessage(SendMessageRequest.builder()
@@ -187,7 +187,7 @@ public class mainWorkerClass {
 
     private static void uploadToS3(String key, String content) {
         S3Client s3 = S3Client.builder()
-                .region(Region.US_EAST_1)
+                .region(Region.US_WEST_2)
                 .build();
 
         s3.putObject(PutObjectRequest.builder()
