@@ -48,8 +48,8 @@ public class ManagerMain {
     private static final Region ec2_region = Region.US_EAST_1;
     private static final Region s3_region = Region.US_WEST_2;
     private static int jobIdCounter;
-    private static Map<Integer,ClientRequest> clientRequestIdToClientRequest;
-    private static Map<Integer, Integer> jobIdToClientRequestId;
+    private static volatile Map<Integer,ClientRequest> clientRequestIdToClientRequest;
+    private static volatile Map<Integer, Integer> jobIdToClientRequestId;
     private static Semaphore completedJobsLock;
     private static Semaphore clientRequestsLock;
     private static Semaphore workerCountLock;
