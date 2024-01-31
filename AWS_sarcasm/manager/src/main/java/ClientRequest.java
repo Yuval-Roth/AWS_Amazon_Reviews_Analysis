@@ -68,7 +68,7 @@ public final class ClientRequest {
     }
 
     public int requiredWorkers() {
-        return (int) Math.ceil((double) output.size() / reviewsPerWorker);
+        return (int) Math.ceil((double) reviewsCount / reviewsPerWorker);
     }
 
     public void setReviewsCount(int reviewsCount) {

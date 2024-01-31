@@ -69,7 +69,7 @@
           </descriptorRefs>
           <archive>
             <manifest>
-              <mainClass>WorkerMain</mainClass>
+              <mainClass>ManagerMainClass</mainClass>
             </manifest>
           </archive>
         </configuration>

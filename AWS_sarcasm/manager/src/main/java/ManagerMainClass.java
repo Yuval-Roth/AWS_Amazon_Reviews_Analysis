@@ -15,7 +15,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class ManagerMain {
+public class ManagerMainClass {
 
     // <S3>
     public static final String BUCKET_NAME = "distributed-systems-2024-bucket-yuval-adi";
@@ -23,9 +23,9 @@ public class ManagerMain {
     // </S3>
 
     // <EC2>
-    public static final String WORKER_IMAGE_ID = "ami-0f3fcfc1ba98c6fb9";
+    public static String WORKER_IMAGE_ID;
     public static final String SECURITY_GROUP = "sg-00c67312e0a74a525";
-    public static final String INSTANCE_TYPE = "t2.medium";
+    public static final String WORKER_INSTANCE_TYPE = "t2.large";
     public static final int MANAGER_ID = 1;
     private static Ec2Client ec2;
     private static int instanceIdCounter;
@@ -40,7 +40,7 @@ public class ManagerMain {
     private static final String USER_INPUT_QUEUE_NAME = "userInputQueue";
     private static final String USER_OUTPUT_QUEUE_NAME = "userOutputQueue";
     private static final String SQS_DOMAIN_PREFIX = "https://sqs.us-east-1.amazonaws.com/057325794177/";
-    private static final int MAX_WORKERS = 18;
+    private static final int MAX_WORKERS = 8;
     private static SqsClient sqs;
     // </SQS>
 
@@ -65,9 +65,7 @@ public class ManagerMain {
 
     public static void main(String[] args) {
 
-        if(args.length > 0 && args[0].equals("debug")){
-            debugMode = true;
-        }
+        readArgs(args);
 
         sqs = SqsClient.builder()
                 .region(ec2_region)
@@ -121,6 +119,28 @@ public class ManagerMain {
         }
     }
 
+    private static void readArgs(String[] args) {
+        if(args.length == 0){
+            System.out.println("Usage: java -jar managerProgram.jar -workerImageId=<workerImageId> [-debug]");
+            System.exit(1);
+        }
+
+        for(String arg : args){
+
+            if(arg.equals("-debug")){
+                debugMode = true;
+            }
+            if(arg.startsWith("-workerImageId=")){
+                WORKER_IMAGE_ID = arg.split("=")[1];
+            }
+        }
+
+        if(WORKER_IMAGE_ID == null){
+            System.out.println("Usage: java -jar managerProgram.jar -workerImageId=<workerImageId> [-debug]");
+            System.exit(1);
+        }
+    }
+
     private static void mainLoop(Exception[] exceptionHandler) {
 
         Random rand = new Random();
@@ -140,8 +160,8 @@ public class ManagerMain {
                 }
 
                 if(System.currentTimeMillis() >= nextWorkerCountCheck && workerCountLock.tryAcquire()) {
-                    balanceWorkerCount();
-                    nextWorkerCountCheck = System.currentTimeMillis() + 5000;
+                    balanceInstanceCount();
+                    nextWorkerCountCheck = System.currentTimeMillis() + 10000;
                     workerCountLock.release();
                 }
 
@@ -218,7 +238,6 @@ public class ManagerMain {
                 // delete message from queue
                 deleteFromQueue(message, USER_INPUT_QUEUE_NAME);
             }
-            balanceWorkerCount();
         }
     }
 
@@ -279,7 +298,6 @@ public class ManagerMain {
                 // delete message from queue
                 deleteFromQueue(message, WORKER_OUT_QUEUE_NAME);
             }
-            balanceWorkerCount();
         }
 
         if(shouldTerminate.get() && clientRequestIdToClientRequest.isEmpty()){
@@ -296,18 +314,19 @@ public class ManagerMain {
         } while (! requiredWorkers.compareAndSet(currentRequiredWorkers, newRequiredWorkers));
     }
 
-    private static void balanceWorkerCount() {
+    private static void balanceInstanceCount() {
         
         if(debugMode) return;
 
         // get number of workers
         int workerCount = getWorkerCount();
-        int requiredWorkerCount = Math.min(MAX_WORKERS,requiredWorkers.get());
+        int requiredInstanceCount = (int) Math.ceil(requiredWorkers.get() / 2.0);
+        int finalInstanceCount = Math.min(MAX_WORKERS, requiredInstanceCount);
 
-        if(workerCount < requiredWorkerCount){
-            startWorkers(requiredWorkerCount - workerCount);
-        } else if(workerCount > requiredWorkerCount){
-            stopWorkers(workerCount - requiredWorkerCount);
+        if(workerCount < finalInstanceCount){
+            startWorkers(finalInstanceCount - workerCount);
+        } else if(workerCount > finalInstanceCount){
+            stopWorkers(workerCount - finalInstanceCount);
         }
     }
 
@@ -344,12 +363,16 @@ public class ManagerMain {
             Job stopJob = new Job(-1, Job.Action.SHUTDOWN, "");
             sendToQueue(WORKER_MANAGEMENT_QUEUE_NAME, JsonUtils.serialize(stopJob), WORKER_MESSAGE_GROUP_ID);
         }
+
+        System.out.println("Stopped %d workers".formatted(count));
     }
 
     private static void startWorkers(int count) {
         for (int i = 0; i < count; i++) {
             startWorker(instanceIdCounter++);
         }
+
+        System.out.println("Started %d workers".formatted(count));
     }
 
     private static void startWorker(int id) {
@@ -360,7 +383,7 @@ public class ManagerMain {
                         .tags(Tag.builder().key("Name").value("WorkerInstance-"+id).build())
                         .build())
                 .securityGroupIds(SECURITY_GROUP)
-                .instanceType(INSTANCE_TYPE)
+                .instanceType(WORKER_INSTANCE_TYPE)
                 .iamInstanceProfile(IamInstanceProfileSpecification.builder()
                         .arn("arn:aws:iam::057325794177:instance-profile/LabInstanceProfile")
                         .build())
@@ -377,7 +400,7 @@ public class ManagerMain {
         return """
                 #!/bin/bash
                 cd /runtimedir
-                java -Xmx4500m -Xms3750m -jar workerMain.jar %s %s %s %s %s > output.log 2>&1
+                java -Xmx7500m -Xms7500m -jar workerProgram.jar %s %s %s %s %s > output.log 2>&1
                 sudo shutdown -h now""".formatted(
                 instanceIdCounter,
                 getQueueURL(WORKER_IN_QUEUE_NAME),
