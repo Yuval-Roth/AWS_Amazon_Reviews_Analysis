@@ -363,14 +363,14 @@ public class ManagerMainClass {
                     Thread.sleep(1000);
                 } catch (InterruptedException ignored) {}
             }
+            log("Stopped %d workers".formatted(delta));
         }
         // make sure that the number of workers in all states is between 0 and MAX_WORKERS
          else if(runningWorkersCount < finalInstanceCount){
             startWorkers(delta);
+            log("Started %d workers".formatted(delta));
          }
     }
-
-
 
     // ============================================================================ |
     // ========================  AWS API FUNCTIONS  =============================== |
@@ -411,16 +411,12 @@ public class ManagerMainClass {
             Job stopJob = new Job(-1, Job.Action.SHUTDOWN, "");
             sendToQueue(WORKER_MANAGEMENT_QUEUE_NAME, JsonUtils.serialize(stopJob), WORKER_MESSAGE_GROUP_ID);
         }
-
-        log("Stopped %d workers".formatted(count));
     }
 
     private static void startWorkers(int count) {
         for (int i = 0; i < count; i++) {
             startWorker(instanceIdCounter++);
         }
-
-        log("Started %d workers".formatted(count));
     }
 
     private static void startWorker(int id) {
@@ -559,8 +555,6 @@ public class ManagerMainClass {
                 .count();
     }
 
-
-
     // ============================================================================ |
     // ========================  UTILITY FUNCTIONS  =============================== |
     // ============================================================================ |
@@ -594,6 +588,9 @@ public class ManagerMainClass {
         if(e instanceof TerminateException){
             stopWorkers(getWorkerCount(InstanceStateName.RUNNING));
             waitUntilAllWorkersStopped();
+            if(uploadLogs && ! uploadBuffer.isEmpty()){
+                appendToS3("logs/"+uploadLogName, uploadBuffer.toString());
+            }
             System.exit(0);
         }
 
