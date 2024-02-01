@@ -139,7 +139,6 @@ public final class ClientRequest {
                 "fileName=" + fileName + ", " +
                 "reviewsPerWorker=" + reviewsPerWorker + ", " +
                 "terminate=" + terminate + ", " +
-                "output=" + output + ", " +
                 "numJobs=" + numJobs + ", " +
                 "reviewsCount=" + reviewsCount + ']';
     }

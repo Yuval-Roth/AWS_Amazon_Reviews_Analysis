@@ -10,6 +10,7 @@ import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.*;
 
 import java.io.IOException;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -45,6 +46,38 @@ public class ManagerMainClass {
     // </SQS>
 
     // <APPLICATION DATA>
+
+    // <DEBUG FLAGS>
+    private static final String USAGE = """
+                Usage: java -jar managerProgram.jar [-workerImageId <workerImageId> | -h | -help] [optional debug flags]
+                                    
+                -h | -help :- Print this message and exit.
+                                    
+                optional debug flags:
+                
+                    -d | -debug :- Run in debug mode, logging all operations to standard output
+                    
+                    -ul | -uploadLog <file name> :- logs will be uploaded to <file name> in the S3 bucket.
+                                  Must be used with -debug.
+                                  
+                    -ui | -uploadInterval <interval in seconds> :- When combined with -uploadLog, specifies the interval in seconds
+                                  between log uploads to the S3 bucket.
+                                  Must be a positive integer, must be used with -uploadLog.
+                                  If this argument is not specified, defaults to 60 seconds.
+                                  
+                    -noEc2 :- Run without creating EC2 instances. Useful for debugging locally.
+                """;
+    private static volatile boolean debugMode;
+    private static volatile boolean noEc2;
+    private static volatile boolean uploadLogs;
+    private static volatile int appendLogIntervalInSeconds;
+    private static volatile StringBuilder uploadBuffer;
+    private static volatile long nextLogUpload;
+    private static String uploadLogName;
+    private static Semaphore logUploadLock;
+    // </DEBUG FLAGS>
+
+
     private static final Region ec2_region = Region.US_EAST_1;
     private static final Region s3_region = Region.US_WEST_2;
     private static int jobIdCounter;
@@ -53,7 +86,6 @@ public class ManagerMainClass {
     private static Semaphore completedJobsLock;
     private static Semaphore clientRequestsLock;
     private static Semaphore workerCountLock;
-    private static volatile boolean debugMode;
     private static volatile long nextClientRequestCheck;
     private static volatile long nextCompletedJobCheck;
     private static volatile long nextWorkerCountCheck;
@@ -65,6 +97,7 @@ public class ManagerMainClass {
 
     public static void main(String[] args) {
 
+        uploadBuffer = new StringBuilder();
         readArgs(args);
 
         sqs = SqsClient.builder()
@@ -86,6 +119,7 @@ public class ManagerMainClass {
         completedJobsLock = new Semaphore(1);
         clientRequestsLock = new Semaphore(1);
         workerCountLock = new Semaphore(1);
+        logUploadLock = new Semaphore(1);
         shouldTerminate = new AtomicBoolean(false);
         requiredWorkers = new AtomicInteger(0);
 
@@ -119,28 +153,6 @@ public class ManagerMainClass {
         }
     }
 
-    private static void readArgs(String[] args) {
-        if(args.length == 0){
-            System.out.println("Usage: java -jar managerProgram.jar -workerImageId=<workerImageId> [-debug]");
-            System.exit(1);
-        }
-
-        for(String arg : args){
-
-            if(arg.equals("-debug")){
-                debugMode = true;
-            }
-            if(arg.startsWith("-workerImageId=")){
-                WORKER_IMAGE_ID = arg.split("=")[1];
-            }
-        }
-
-        if(WORKER_IMAGE_ID == null){
-            System.out.println("Usage: java -jar managerProgram.jar -workerImageId=<workerImageId> [-debug]");
-            System.exit(1);
-        }
-    }
-
     private static void mainLoop(Exception[] exceptionHandler) {
 
         Random rand = new Random();
@@ -161,11 +173,17 @@ public class ManagerMainClass {
 
                 if(System.currentTimeMillis() >= nextWorkerCountCheck && workerCountLock.tryAcquire()) {
                     balanceInstanceCount();
-                    nextWorkerCountCheck = System.currentTimeMillis() + 10000;
+                    nextWorkerCountCheck = System.currentTimeMillis() + 5000;
                     workerCountLock.release();
                 }
 
-                long nextWakeup = Math.min(Math.min(nextClientRequestCheck, nextCompletedJobCheck), nextWorkerCountCheck);
+                if(uploadLogs && System.currentTimeMillis() >= nextLogUpload && logUploadLock.tryAcquire()){
+                    appendToS3(uploadLogName, uploadBuffer.toString());
+                    uploadBuffer = new StringBuilder();
+                    nextLogUpload = System.currentTimeMillis() + (appendLogIntervalInSeconds * 1000L);
+                }
+
+                long nextWakeup = min(nextClientRequestCheck, nextCompletedJobCheck, nextWorkerCountCheck, nextLogUpload);
                 int randomTime = rand.nextInt(0,20);
 
                 try {
@@ -178,6 +196,7 @@ public class ManagerMainClass {
             }
         }
     }
+
 
     // ============================================================================ |
     // ========================  MAIN FLOW FUNCTIONS  ============================= |
@@ -219,6 +238,9 @@ public class ManagerMainClass {
                 clientRequest.setReviewsCount(reviewsCount);
                 addToAtomicInteger(clientRequest.requiredWorkers());
 
+                log("Received client request: %s".formatted(clientRequest));
+                StringBuilder _attachedJobs = new StringBuilder("\nAttached jobs: [ ");
+
                 // split client request to jobs and send to workers
                 for (TitleReviews tr : smallTitleReviewsList) {
 
@@ -227,20 +249,25 @@ public class ManagerMainClass {
                     Job job = new Job(jobIdCounter++, Job.Action.PROCESS, jsonJob);
                     String messageBody = JsonUtils.serialize(job);
 
+                    _attachedJobs.append(job.jobId());
+
                     // map job id to client request id
                     jobIdToClientRequestId.put(job.jobId(),clientRequest.requestId());
                     clientRequest.incrementNumJobs();
 
                     // send job to worker
                     sendToQueue(WORKER_IN_QUEUE_NAME, messageBody);
+
                 }
-                
+
+                _attachedJobs.append(" ]");
+                log(_attachedJobs.toString());
+
                 // delete message from queue
                 deleteFromQueue(message, USER_INPUT_QUEUE_NAME);
             }
         }
     }
-
     private static void checkForCompletedJobs() throws TerminateException {
 
         ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
@@ -275,12 +302,14 @@ public class ManagerMainClass {
                     clientRequest.decrementNumJobs();
                     jobIdToClientRequestId.remove(job.jobId()); // remove job id from map
 
+                    log("Received completed job: %s".formatted(job.jobId()));
+
                     // check if client request is done
                     if (clientRequest.isDone()) {
 
                         // upload client request output to s3
                         String outputJson = clientRequest.getProcessedReviewsAsJson();
-                        String uploadedName = clientRequest.fileName() + "_completed";
+                        String uploadedName = "completed_"+UUID.randomUUID()+"____"+clientRequest.fileName();
                         uploadToS3(uploadedName, outputJson);
 
                         // send completed notification to user
@@ -292,7 +321,13 @@ public class ManagerMainClass {
 
                         // decrement required workers
                         addToAtomicInteger(-clientRequest.requiredWorkers());
+
+                        log("Completed client request: %s".formatted(clientRequest));
+
                     }
+                }else {
+                    // job was duplicated, ignore
+                    log("Received duplicate job: %s".formatted(job.jobId()));
                 }
 
                 // delete message from queue
@@ -301,39 +336,40 @@ public class ManagerMainClass {
         }
 
         if(shouldTerminate.get() && clientRequestIdToClientRequest.isEmpty()){
+            log("Terminating");
             throw new TerminateException();
         }
     }
 
-    private static void addToAtomicInteger(int num) {
-        int currentRequiredWorkers;
-        int newRequiredWorkers;
-        do{
-            currentRequiredWorkers = requiredWorkers.get();
-            newRequiredWorkers = currentRequiredWorkers + num;
-        } while (! requiredWorkers.compareAndSet(currentRequiredWorkers, newRequiredWorkers));
-    }
-
     private static void balanceInstanceCount() {
-        
-        if(debugMode) return;
 
-        // get number of workers
-        int workerCount = getWorkerCount();
-        int requiredInstanceCount = (int) Math.ceil(requiredWorkers.get() / 2.0);
+        if(noEc2) return;
+
+        int runningWorkersCount = getWorkerCount(InstanceStateName.RUNNING, InstanceStateName.PENDING);
+        int requiredInstanceCount = Math.min(jobIdToClientRequestId.size (),(int) Math.ceil(requiredWorkers.get() / 2.0));
         int finalInstanceCount = Math.min(MAX_WORKERS, requiredInstanceCount);
+        int delta = Math.abs(runningWorkersCount - finalInstanceCount);
 
-        if(workerCount < finalInstanceCount){
-            startWorkers(finalInstanceCount - workerCount);
-        } else if(workerCount > finalInstanceCount){
-            stopWorkers(workerCount - finalInstanceCount);
+        // if the number of running workers is greater than the required number, stop workers
+        if(runningWorkersCount > finalInstanceCount){
+            stopWorkers(delta);
+            while(getWorkerCount(InstanceStateName.RUNNING) != finalInstanceCount){
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException ignored) {}
+            }
         }
+        // make sure that the number of workers in all states is between 0 and MAX_WORKERS
+         else if(runningWorkersCount < finalInstanceCount){
+            startWorkers(delta);
+         }
     }
+
+
 
     // ============================================================================ |
     // ========================  AWS API FUNCTIONS  =============================== |
     // ============================================================================ |
-
     private static String downloadFromS3(String key) {
         var r = s3.getObject(GetObjectRequest.builder()
                 .bucket(BUCKET_NAME)
@@ -355,6 +391,10 @@ public class ManagerMainClass {
                     .bucket(BUCKET_NAME)
                     .key("files/"+key).build(),
                 RequestBody.fromString(content));
+    }
+    private static void appendToS3(String key, String content) {
+        String oldContent = downloadFromS3(key);
+        uploadToS3(key, oldContent + content);
     }
 
 
@@ -400,7 +440,7 @@ public class ManagerMainClass {
         return """
                 #!/bin/bash
                 cd /runtimedir
-                java -Xmx7500m -Xms7500m -jar workerProgram.jar %s %s %s %s %s > output.log 2>&1
+                java -Xmx7000m -jar workerProgram.jar %s %s %s %s %s > output.log 2>&1
                 sudo shutdown -h now""".formatted(
                 instanceIdCounter,
                 getQueueURL(WORKER_IN_QUEUE_NAME),
@@ -496,19 +536,21 @@ public class ManagerMainClass {
                 .receiptHandle(message.receiptHandle())
                 .build());
     }
-    private static int getWorkerCount() {
+
+    private static int getWorkerCount(InstanceStateName... state) {
         return (int) ec2.describeInstances().reservations().stream()
                 .flatMap(reservation -> reservation.instances().stream())
-                .filter(instance -> ! instance.state().name().equals(InstanceStateName.TERMINATED))
+                .filter(instance -> Arrays.asList(state).contains(instance.state().name()))
                 .filter(instance -> instance.tags().stream()
                         .noneMatch(tag -> tag.key().equals("Name") && tag.value().equals("ManagerInstance")))
                 .count();
     }
-    
+
+
+
     // ============================================================================ |
     // ========================  UTILITY FUNCTIONS  =============================== |
     // ============================================================================ |
-
     private static List<TitleReviews> splitTitleReviews(TitleReviews tr, int splitSize) {
 
         List<TitleReviews> smallTitleReviewsList = new LinkedList<>(); //will hold all title Reviews with 5 reviews
@@ -529,15 +571,15 @@ public class ManagerMainClass {
     private static String getQueueURL(String queueName){
         return SQS_DOMAIN_PREFIX + queueName;
     }
-
     private static String getDeDupeId(){
         return "%s-%s-%s".formatted(MANAGER_ID,Thread.currentThread().getName(),UUID.randomUUID());
     }
 
     private static void handleException(Exception e) {
+        LocalDateTime now = LocalDateTime.now();
 
         if(e instanceof TerminateException){
-            stopWorkers(getWorkerCount());
+            stopWorkers(getWorkerCount(InstanceStateName.RUNNING));
             waitUntilAllWorkersStopped();
             System.exit(0);
         }
@@ -547,14 +589,27 @@ public class ManagerMainClass {
         clientRequestsLock.release();
         workerCountLock.release();
 
+        String timeStamp = getTimeStamp(now);
+        String logName = "errors/%s error_manager.log".formatted(timeStamp);
+
         String stackTrace = stackTraceToString(e);
-        String logName = "errors/error_manager_%s.log".formatted(UUID.randomUUID());
         uploadToS3(logName,stackTrace);
+        System.out.println("%s\n%s".formatted(timeStamp,stackTraceToString(e)));
+    }
+
+    private static String getTimeStamp(LocalDateTime now) {
+        return "[%s.%s.%s - %s:%s:%s]".formatted(
+                now.getDayOfMonth() > 9 ? now.getDayOfMonth() : "0"+ now.getDayOfMonth(),
+                now.getMonthValue() > 9 ? now.getMonthValue() : "0"+ now.getMonthValue(),
+                now.getYear(),
+                now.getHour() > 9 ? now.getHour() : "0"+ now.getHour(),
+                now.getMinute() > 9 ? now.getMinute() : "0"+ now.getMinute(),
+                now.getSecond() > 9 ? now.getSecond() : "0"+ now.getSecond());
     }
 
     private static void waitUntilAllWorkersStopped() {
         while(true){
-            if (getWorkerCount() != 0){
+            if (getWorkerCount(InstanceStateName.RUNNING) != 0){
                 try {
                     Thread.sleep(1000);
                 } catch (InterruptedException ignored) {}
@@ -583,6 +638,145 @@ public class ManagerMainClass {
             output.append("\t").append(element).append("\n");
         }
         return output.toString();
+    }
+
+    private static void printUsageAndExit(String errorMessage) {
+        if(! errorMessage.equals("")) {
+            System.out.println(errorMessage);
+        }
+        System.out.println(USAGE);
+        System.exit(1);
+    }
+
+    private static void addToAtomicInteger(int num) {
+        int currentRequiredWorkers;
+        int newRequiredWorkers;
+        do{
+            currentRequiredWorkers = requiredWorkers.get();
+            newRequiredWorkers = currentRequiredWorkers + num;
+        } while (! requiredWorkers.compareAndSet(currentRequiredWorkers, newRequiredWorkers));
+    }
+
+    private static void log(String message){
+        if(debugMode){
+            String timeStamp = getTimeStamp(LocalDateTime.now());
+            if(uploadLogs){
+                uploadBuffer.append(timeStamp).append(" ").append(message).append("\n");
+            }
+            System.out.printf("%s %s%n",timeStamp,message);
+        }
+    }
+
+    private static long min(long... nums){
+        long min = Long.MAX_VALUE;
+        for (long num : nums) {
+            if(num < min){
+                min = num;
+            }
+        }
+        return min;
+    }
+
+    private static void readArgs(String[] args) {
+
+        if(args.length == 0){
+            System.out.println();
+            printUsageAndExit("no arguments provided\n");
+        }
+
+        List<String> helpOptions = List.of("-h","-help");
+        List<String> debugModeOptions = List.of("-d","-debug");
+        List<String> uploadLogOptions = List.of("-ul","-uploadlog");
+        List<String> uploadIntervalOptions = List.of("-ui","-uploadinterval");
+        List<String> argsList = new LinkedList<>();
+        argsList.addAll(helpOptions);
+        argsList.addAll(debugModeOptions);
+        argsList.addAll(uploadLogOptions);
+        argsList.addAll(uploadIntervalOptions);
+        argsList.add("-noec2");
+        argsList.add("-workerimageid");
+
+        for (int i = 0; i < args.length; i++) {
+            String arg = args[i].toLowerCase();
+            String errorMessage;
+
+            if (arg.equals("-workerimageid")) {
+                errorMessage = "Missing worker image id\n";
+                if(argsList.contains(args[i+1])){
+                    printUsageAndExit(errorMessage);
+                }
+                try{
+                    WORKER_IMAGE_ID = args[i+1];
+                    i++;
+                    continue;
+                } catch(IndexOutOfBoundsException e){
+                    printUsageAndExit(errorMessage);
+                }
+            }
+
+            if (debugModeOptions.contains(arg)) {
+                debugMode = true;
+                continue;
+            }
+            if (uploadLogOptions.contains(arg)) {
+                uploadLogs = true;
+                errorMessage = "Missing upload log name\n";
+                try{
+                    if(argsList.contains(args[i+1])){
+                        printUsageAndExit(errorMessage);
+                    }
+                    uploadLogName = args[i+1];
+                    i++;
+                    continue;
+                } catch (IndexOutOfBoundsException e){
+                    System.out.println();
+                    printUsageAndExit(errorMessage);
+                }
+            }
+            if (uploadIntervalOptions.contains(arg)) {
+                errorMessage = "Missing upload interval\n";
+                try{
+                    if(argsList.contains(args[i+1])){
+                        printUsageAndExit(errorMessage);
+                    }
+                    appendLogIntervalInSeconds = Integer.parseInt(args[i+1]);
+                    i++;
+                    continue;
+                } catch (IndexOutOfBoundsException e){
+                    printUsageAndExit(errorMessage);
+                } catch (NumberFormatException e){
+                    printUsageAndExit("Invalid upload interval\n");
+                }
+            }
+            if(arg.equals("-noec2")){
+                noEc2 = true;
+                continue;
+            }
+            if (arg.equals("-h") || arg.equals("-help")) {
+                printUsageAndExit("");
+            }
+
+            System.out.println();
+            printUsageAndExit("Unknown argument: %s\n".formatted(arg));
+        }
+
+        if(WORKER_IMAGE_ID == null && ! noEc2){
+            printUsageAndExit("No worker image id was provided and 'noEc2' flag is not provided either\n");
+        }
+
+        if(uploadLogs && ! debugMode){
+            printUsageAndExit("Upload logs flag was provided but not debug mode flag\n");
+        }
+
+        if(uploadLogs && appendLogIntervalInSeconds == 0){
+            appendLogIntervalInSeconds = 60;
+        }
+
+        log("Manager started");
+        log("Worker image id: %s".formatted(WORKER_IMAGE_ID));
+        log("Upload logs: %s".formatted(uploadLogs));
+        log("Upload interval: %s".formatted(appendLogIntervalInSeconds));
+        log("No EC2: %s".formatted(noEc2));
     }
 }
 
