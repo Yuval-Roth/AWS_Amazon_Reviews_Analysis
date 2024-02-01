@@ -137,6 +137,7 @@ public class ManagerMainClass {
         nextClientRequestCheck = System.currentTimeMillis();
         nextCompletedJobCheck = System.currentTimeMillis();
         nextWorkerCountCheck = System.currentTimeMillis();
+        nextLogUpload = System.currentTimeMillis() + (appendLogIntervalInSeconds * 1000L);
 
         while(true){
             thread2 = new Thread(()-> mainLoop(exceptionHandler),"Thread2");
@@ -178,9 +179,12 @@ public class ManagerMainClass {
                 }
 
                 if(uploadLogs && System.currentTimeMillis() >= nextLogUpload && logUploadLock.tryAcquire()){
-                    appendToS3(uploadLogName, uploadBuffer.toString());
-                    uploadBuffer = new StringBuilder();
+                    if(! uploadBuffer.isEmpty()){
+                        appendToS3("logs/"+uploadLogName, uploadBuffer.toString());
+                        uploadBuffer = new StringBuilder();
+                    }
                     nextLogUpload = System.currentTimeMillis() + (appendLogIntervalInSeconds * 1000L);
+                    logUploadLock.release();
                 }
 
                 long nextWakeup = min(nextClientRequestCheck, nextCompletedJobCheck, nextWorkerCountCheck, nextLogUpload);
@@ -238,8 +242,7 @@ public class ManagerMainClass {
                 clientRequest.setReviewsCount(reviewsCount);
                 addToAtomicInteger(clientRequest.requiredWorkers());
 
-                log("Received client request: %s".formatted(clientRequest));
-                StringBuilder _attachedJobs = new StringBuilder("\nAttached jobs: [ ");
+                StringBuilder _attachedJobs = new StringBuilder("Attached jobs: [ ");
 
                 // split client request to jobs and send to workers
                 for (TitleReviews tr : smallTitleReviewsList) {
@@ -249,7 +252,7 @@ public class ManagerMainClass {
                     Job job = new Job(jobIdCounter++, Job.Action.PROCESS, jsonJob);
                     String messageBody = JsonUtils.serialize(job);
 
-                    _attachedJobs.append(job.jobId());
+                    _attachedJobs.append(job.jobId()).append(" ");
 
                     // map job id to client request id
                     jobIdToClientRequestId.put(job.jobId(),clientRequest.requestId());
@@ -260,7 +263,8 @@ public class ManagerMainClass {
 
                 }
 
-                _attachedJobs.append(" ]");
+                _attachedJobs.append("]");
+                log("Received client request: %s".formatted(clientRequest));
                 log(_attachedJobs.toString());
 
                 // delete message from queue
@@ -300,9 +304,10 @@ public class ManagerMainClass {
                     TitleReviews tr = JsonUtils.deserialize(job.data(), TitleReviews.class);
                     clientRequest.addTitleReviews(tr);
                     clientRequest.decrementNumJobs();
-                    jobIdToClientRequestId.remove(job.jobId()); // remove job id from map
 
-                    log("Received completed job: %s".formatted(job.jobId()));
+                    log("Received completed job: %s (from client request %s)".formatted(job.jobId(),jobIdToClientRequestId.get(job.jobId())));
+
+                    jobIdToClientRequestId.remove(job.jobId()); // remove job id from map
 
                     // check if client request is done
                     if (clientRequest.isDone()) {
@@ -393,7 +398,10 @@ public class ManagerMainClass {
                 RequestBody.fromString(content));
     }
     private static void appendToS3(String key, String content) {
-        String oldContent = downloadFromS3(key);
+        String oldContent = "";
+        try{
+            oldContent = downloadFromS3(key);
+        } catch (NoSuchKeyException ignored){}
         uploadToS3(key, oldContent + content);
     }
 
@@ -404,7 +412,7 @@ public class ManagerMainClass {
             sendToQueue(WORKER_MANAGEMENT_QUEUE_NAME, JsonUtils.serialize(stopJob), WORKER_MESSAGE_GROUP_ID);
         }
 
-        System.out.println("Stopped %d workers".formatted(count));
+        log("Stopped %d workers".formatted(count));
     }
 
     private static void startWorkers(int count) {
@@ -412,7 +420,7 @@ public class ManagerMainClass {
             startWorker(instanceIdCounter++);
         }
 
-        System.out.println("Started %d workers".formatted(count));
+        log("Started %d workers".formatted(count));
     }
 
     private static void startWorker(int id) {
@@ -480,6 +488,11 @@ public class ManagerMainClass {
             s3.putObject(PutObjectRequest.builder()
                             .bucket(bucketName)
                             .key("files/errors/")
+                            .build(),
+                    RequestBody.empty());
+            s3.putObject(PutObjectRequest.builder()
+                            .bucket(bucketName)
+                            .key("files/logs/")
                             .build(),
                     RequestBody.empty());
         }
