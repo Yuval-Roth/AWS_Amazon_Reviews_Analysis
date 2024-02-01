@@ -305,7 +305,7 @@ public class ManagerMainClass {
                     clientRequest.addTitleReviews(tr);
                     clientRequest.decrementNumJobs();
 
-                    log("Received completed job: %s (from client request %s)".formatted(job.jobId(),jobIdToClientRequestId.get(job.jobId())));
+                    log("Received completed job: %s (from client %s request %s)".formatted(job.jobId(),clientRequest.clientId(),clientRequest.requestId()));
 
                     jobIdToClientRequestId.remove(job.jobId()); // remove job id from map
 
@@ -351,24 +351,21 @@ public class ManagerMainClass {
         if(noEc2) return;
 
         int runningWorkersCount = getWorkerCount(InstanceStateName.RUNNING, InstanceStateName.PENDING);
-        int requiredInstanceCount = Math.min(jobIdToClientRequestId.size (),(int) Math.ceil(requiredWorkers.get() / 2.0));
-        int finalInstanceCount = Math.min(MAX_WORKERS, requiredInstanceCount);
-        int delta = Math.abs(runningWorkersCount - finalInstanceCount);
+        int requiredInstanceCount = (int)min(requiredWorkers.get(),jobIdToClientRequestId.size(),MAX_WORKERS);
+        int delta = Math.abs(runningWorkersCount - requiredInstanceCount);
 
         // if the number of running workers is greater than the required number, stop workers
-        if(runningWorkersCount > finalInstanceCount){
+        if(runningWorkersCount > requiredInstanceCount){
             stopWorkers(delta);
-            while(getWorkerCount(InstanceStateName.RUNNING) != finalInstanceCount){
+            while(getWorkerCount(InstanceStateName.RUNNING) != requiredInstanceCount){
                 try {
                     Thread.sleep(1000);
                 } catch (InterruptedException ignored) {}
             }
-            log("Stopped %d workers".formatted(delta));
         }
         // make sure that the number of workers in all states is between 0 and MAX_WORKERS
-         else if(runningWorkersCount < finalInstanceCount){
+         else if(runningWorkersCount < requiredInstanceCount){
             startWorkers(delta);
-            log("Started %d workers".formatted(delta));
          }
     }
 
@@ -411,12 +408,14 @@ public class ManagerMainClass {
             Job stopJob = new Job(-1, Job.Action.SHUTDOWN, "");
             sendToQueue(WORKER_MANAGEMENT_QUEUE_NAME, JsonUtils.serialize(stopJob), WORKER_MESSAGE_GROUP_ID);
         }
+        if(count > 0) log("Stopped %d workers".formatted(count));
     }
 
     private static void startWorkers(int count) {
         for (int i = 0; i < count; i++) {
             startWorker(instanceIdCounter++);
         }
+        if(count >0) log("Started %d workers".formatted(count));
     }
 
     private static void startWorker(int id) {
