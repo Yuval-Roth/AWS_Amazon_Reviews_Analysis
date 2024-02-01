@@ -124,7 +124,7 @@ public class ManagerMainClass {
         requiredWorkers = new AtomicInteger(0);
 
         createBucketIfNotExists(BUCKET_NAME);
-        createQueueIfNotExists(WORKER_IN_QUEUE_NAME);
+        createQueueIfNotExists(WORKER_IN_QUEUE_NAME,300);
         createQueueIfNotExists(WORKER_OUT_QUEUE_NAME);
         createQueueIfNotExists(WORKER_MANAGEMENT_QUEUE_NAME);
         createQueueIfNotExists(USER_INPUT_QUEUE_NAME);
@@ -140,7 +140,7 @@ public class ManagerMainClass {
         nextLogUpload = System.currentTimeMillis() + (appendLogIntervalInSeconds * 1000L);
 
         while(true){
-            thread2 = new Thread(()-> mainLoop(exceptionHandler),"Thread2");
+            thread2 = new Thread(()-> mainLoop(exceptionHandler),"secondary");
             thread2.start();
             mainLoop(exceptionHandler);
 
@@ -351,7 +351,7 @@ public class ManagerMainClass {
         if(noEc2) return;
 
         int runningWorkersCount = getWorkerCount(InstanceStateName.RUNNING, InstanceStateName.PENDING);
-        int requiredInstanceCount = (int)min(requiredWorkers.get(),jobIdToClientRequestId.size(),MAX_WORKERS);
+        int requiredInstanceCount = (int)min(requiredWorkers.get(),(int)Math.ceil(jobIdToClientRequestId.size() / 2.0),MAX_WORKERS);
         int delta = Math.abs(runningWorkersCount - requiredInstanceCount);
 
         // if the number of running workers is greater than the required number, stop workers
@@ -443,7 +443,7 @@ public class ManagerMainClass {
         return """
                 #!/bin/bash
                 cd /runtimedir
-                java -Xmx7000m -jar workerProgram.jar %s %s %s %s %s > output.log 2>&1
+                java -Xmx7000m -jar workerProgram.jar -workerId %d -inQueueName %s -outQueueName %s -managementQueueName %s -s3BucketName -d -ul worker_%d.log -ui 15 %s > output.log 2>&1
                 sudo shutdown -h now""".formatted(
                 instanceIdCounter,
                 getQueueURL(WORKER_IN_QUEUE_NAME),
@@ -603,7 +603,7 @@ public class ManagerMainClass {
 
         String stackTrace = stackTraceToString(e);
         uploadToS3(logName,stackTrace);
-        System.out.println("%s\n%s".formatted(timeStamp,stackTraceToString(e)));
+        log("Exception in thread %s:\n%s".formatted(Thread.currentThread(),timeStamp,stackTraceToString(e)));
     }
 
     private static String getTimeStamp(LocalDateTime now) {
@@ -784,6 +784,7 @@ public class ManagerMainClass {
         log("Manager started");
         log("Worker image id: %s".formatted(WORKER_IMAGE_ID));
         log("Upload logs: %s".formatted(uploadLogs));
+        log("log name: %s".formatted(uploadLogName));
         log("Upload interval: %s".formatted(appendLogIntervalInSeconds));
         log("No EC2: %s".formatted(noEc2));
     }
