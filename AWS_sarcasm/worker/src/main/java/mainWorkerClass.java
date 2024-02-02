@@ -75,6 +75,12 @@ public class mainWorkerClass {
         managerQueueLock = new Semaphore(1);
         logUploadLock = new Semaphore(1);
 
+        if(uploadLogs){
+            nextLogUpload = System.currentTimeMillis() + appendLogIntervalInSeconds * 1000L;
+        } else {
+            nextLogUpload = Long.MAX_VALUE;
+        }
+
         // BASE ASSUMPTION: This code is running on a machine with 2 vCPUs
 
         // init sentiment analysis handler and Entity recognition handler
@@ -203,23 +209,20 @@ public class mainWorkerClass {
 
         // Process reviews
         for(Review r : tr.reviews()){
-            log("thread %s found review: %s".formatted(Thread.currentThread().getName(),r.text()));
-
             long start = System.currentTimeMillis();
-            log("thread %s started sentiment analysis".formatted(Thread.currentThread().getName()));
             // Analyze sentiment and entities
             int sentiment = sentimentAnalysisHandler.findSentiment(r.text());
-
-            log("thread %s finished sentiment analysis in %s ms".formatted(Thread.currentThread().getName(),System.currentTimeMillis()-start));
+            long sentimentTime = System.currentTimeMillis()-start;
 
             start = System.currentTimeMillis();
-            log("thread %s started named entity recognition".formatted(Thread.currentThread().getName()));
             Map<String,String> entities = namedEntityRecognitionHandler.findEntities(r.text())
                     .entrySet().stream()
                     .filter(e -> !e.getValue().equals("O")) // Remove non entities
                     .collect(Collectors.toMap(Map.Entry::getKey,Map.Entry::getValue));
+            long entityTime = System.currentTimeMillis()-start;
 
-            log("thread %s finished named entity recognition in %s ms".formatted(Thread.currentThread().getName(),System.currentTimeMillis()-start));
+            log("thread %s finished processing review with %d characters in %d ms. Sentiment analysis took %d ms, entity recognition took %d ms"
+                    .formatted(Thread.currentThread().getName(),r.text().length(),System.currentTimeMillis()-start,sentimentTime,entityTime));
 
             // Update review with sentiment and entities
             r.setEntities(entities);
@@ -470,14 +473,9 @@ public class mainWorkerClass {
             appendLogIntervalInSeconds = 60;
         }
 
-        log("Manager started");
+        log("Worker started");
         log("Upload logs: %s".formatted(uploadLogs));
         log("log name: %s".formatted(uploadLogName));
         log("Upload interval: %s".formatted(appendLogIntervalInSeconds));
     }
-
-
-
-
-
 }

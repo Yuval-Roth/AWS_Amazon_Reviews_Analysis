@@ -20,6 +20,7 @@ public class ManagerMainClass {
 
     // <S3>
     public static final String BUCKET_NAME = "distributed-systems-2024-bucket-yuval-adi";
+    public static final int BIG_REVIEW_LENGTH = 800;
     private static S3Client s3;
     // </S3>
 
@@ -172,7 +173,7 @@ public class ManagerMainClass {
 
                 if(System.currentTimeMillis() >= nextCompletedJobCheck && completedJobsLock.tryAcquire()) {
                     checkForCompletedJobs();
-                    nextCompletedJobCheck = System.currentTimeMillis() + 5000;
+                    nextCompletedJobCheck = System.currentTimeMillis() + 1000;
                     completedJobsLock.release();
                 }
 
@@ -219,6 +220,8 @@ public class ManagerMainClass {
         var r = sqs.receiveMessage(messageRequest);
 
         if(r.hasMessages()){
+
+            List<DeleteMessageBatchRequestEntry> deleteEntries = new LinkedList<>();
 
             for(var message : r.messages()) {
 
@@ -283,7 +286,18 @@ public class ManagerMainClass {
                 log(_attachedJobs.toString());
 
                 // delete message from queue
-                deleteFromQueue(message, USER_INPUT_QUEUE_NAME);
+                deleteEntries.add(DeleteMessageBatchRequestEntry.builder()
+                        .id(UUID.randomUUID().toString())
+                        .receiptHandle(message.receiptHandle())
+                        .build());
+            }
+
+            // delete all messages from queue
+            if(! deleteEntries.isEmpty()) {
+                sqs.deleteMessageBatch(DeleteMessageBatchRequest.builder()
+                        .queueUrl(getQueueURL(USER_INPUT_QUEUE_NAME))
+                        .entries(deleteEntries)
+                        .build());
             }
         }
     }
@@ -458,13 +472,14 @@ public class ManagerMainClass {
         return """
                 #!/bin/bash
                 cd /runtimedir
-                java -Xmx7000m -jar workerProgram.jar -workerId %d -inQueueName %s -outQueueName %s -managementQueueName %s -s3BucketName -d -ul worker_%d.log -ui 15 %s > output.log 2>&1
+                java -Xmx7000m -jar workerProgram.jar -workerId %d -inQueueName %s -outQueueName %s -managementQueueName %s -s3BucketName %s -d -ul worker_%d.log -ui 15 > output.log 2>&1
                 sudo shutdown -h now""".formatted(
                 instanceIdCounter,
                 getQueueURL(WORKER_IN_QUEUE_NAME),
                 getQueueURL(WORKER_OUT_QUEUE_NAME),
                 getQueueURL(WORKER_MANAGEMENT_QUEUE_NAME),
-                BUCKET_NAME
+                BUCKET_NAME,
+                instanceIdCounter
         );
     }
 
@@ -577,6 +592,13 @@ public class ManagerMainClass {
         List<TitleReviews> smallTitleReviewsList = new LinkedList<>(); //will hold all title Reviews with 5 reviews
         List<Review> tempList = new LinkedList<>();
         for (Review rev : tr.reviews()) {
+
+            // if a review is too long, make it a job by itself
+            if(rev.text().length() >= BIG_REVIEW_LENGTH){
+                smallTitleReviewsList.add(new TitleReviews(tr.title(), List.of(rev)));
+                continue;
+            }
+
             tempList.add(rev);
             if (tempList.size() == splitSize) { //counterReview == splitSize
                 smallTitleReviewsList.add(new TitleReviews(tr.title(), tempList));
