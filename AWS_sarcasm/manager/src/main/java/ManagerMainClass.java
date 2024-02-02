@@ -137,7 +137,11 @@ public class ManagerMainClass {
         nextClientRequestCheck = System.currentTimeMillis();
         nextCompletedJobCheck = System.currentTimeMillis();
         nextWorkerCountCheck = System.currentTimeMillis();
-        nextLogUpload = System.currentTimeMillis() + (appendLogIntervalInSeconds * 1000L);
+        if(uploadLogs){
+            nextLogUpload = System.currentTimeMillis() + (appendLogIntervalInSeconds * 1000L);
+        } else {
+            nextLogUpload = Long.MAX_VALUE;
+        }
 
         while(true){
             thread2 = new Thread(()-> mainLoop(exceptionHandler),"secondary");
@@ -162,13 +166,13 @@ public class ManagerMainClass {
 
                 if(! shouldTerminate.get() && System.currentTimeMillis() >= nextClientRequestCheck && clientRequestsLock.tryAcquire()) {
                     checkForClientRequests();
-                    nextClientRequestCheck = System.currentTimeMillis() + 1000;
+                    nextClientRequestCheck = System.currentTimeMillis() + 5000;
                     clientRequestsLock.release();
                 }
 
                 if(System.currentTimeMillis() >= nextCompletedJobCheck && completedJobsLock.tryAcquire()) {
                     checkForCompletedJobs();
-                    nextCompletedJobCheck = System.currentTimeMillis() + 1000;
+                    nextCompletedJobCheck = System.currentTimeMillis() + 5000;
                     completedJobsLock.release();
                 }
 
@@ -221,7 +225,15 @@ public class ManagerMainClass {
                 // read message and create client request
                 ClientRequest clientRequest = JsonUtils.deserialize(message.body(), ClientRequest.class);
                 clientRequestIdToClientRequest.put(clientRequest.requestId(), clientRequest);
-                String input = downloadFromS3(clientRequest.fileName());
+                String input;
+                try{
+                    input = downloadFromS3(clientRequest.fileName());
+                } catch(NoSuchKeyException e){
+                    deleteFromQueue(message, USER_INPUT_QUEUE_NAME);
+                    sendToQueue(USER_OUTPUT_QUEUE_NAME, JsonUtils.serialize(new CompletedClientRequest(clientRequest.clientId(),clientRequest.requestId(), "File not found")));
+                    continue;
+                }
+
                 if(clientRequest.terminate()){
                     shouldTerminate.set(true);
                 }
@@ -603,7 +615,7 @@ public class ManagerMainClass {
 
         String stackTrace = stackTraceToString(e);
         uploadToS3(logName,stackTrace);
-        log("Exception in thread %s:\n%s".formatted(Thread.currentThread(),timeStamp,stackTraceToString(e)));
+        log("Exception in thread %s:\n%s".formatted(Thread.currentThread(),stackTraceToString(e)));
     }
 
     private static String getTimeStamp(LocalDateTime now) {
