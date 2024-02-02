@@ -472,7 +472,7 @@ public class ManagerMainClass {
         return """
                 #!/bin/bash
                 cd /runtimedir
-                java -Xmx7000m -jar workerProgram.jar -workerId %d -inQueueName %s -outQueueName %s -managementQueueName %s -s3BucketName %s -d -ul worker_%d.log -ui 15 > output.log 2>&1
+                java -Xmx7000m -jar workerProgram.jar -workerId %d -inQueueUrl %s -outQueueUrl %s -managerQueueUrl %s -s3BucketName %s -d -ul worker_%d.log -ui 15 > output.log 2>&1
                 sudo shutdown -h now""".formatted(
                 instanceIdCounter,
                 getQueueURL(WORKER_IN_QUEUE_NAME),
@@ -575,12 +575,12 @@ public class ManagerMainClass {
                 .build());
     }
 
-    private static int getWorkerCount(InstanceStateName... state) {
+    private static int getWorkerCount(InstanceStateName... states) {
         return (int) ec2.describeInstances().reservations().stream()
                 .flatMap(reservation -> reservation.instances().stream())
-                .filter(instance -> Arrays.asList(state).contains(instance.state().name()))
+                .filter(instance -> Arrays.asList(states).contains(instance.state().name()))
                 .filter(instance -> instance.tags().stream()
-                        .noneMatch(tag -> tag.key().equals("Name") && tag.value().equals("ManagerInstance")))
+                        .anyMatch(tag -> tag.key().equals("Name") && tag.value().startsWith("WorkerInstance")))
                 .count();
     }
 
