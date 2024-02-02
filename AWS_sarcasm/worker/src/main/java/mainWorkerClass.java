@@ -161,7 +161,7 @@ public class mainWorkerClass {
 
                 if(uploadLogs && System.currentTimeMillis() > nextLogUpload && logUploadLock.tryAcquire()){
                     uploadBuffer.append("\n");
-                    appendToS3(uploadLogName,uploadBuffer.toString());
+                    appendToS3("logs/"+uploadLogName,uploadBuffer.toString());
                     uploadBuffer = new StringBuilder();
                     nextLogUpload = System.currentTimeMillis() + appendLogIntervalInSeconds * 1000L;
                     logUploadLock.release();
@@ -209,6 +209,8 @@ public class mainWorkerClass {
 
         // Process reviews
         for(Review r : tr.reviews()){
+            long reviewStart = System.currentTimeMillis();
+
             long start = System.currentTimeMillis();
             // Analyze sentiment and entities
             int sentiment = sentimentAnalysisHandler.findSentiment(r.text());
@@ -222,7 +224,7 @@ public class mainWorkerClass {
             long entityTime = System.currentTimeMillis()-start;
 
             log("thread %s finished processing review with %d characters in %d ms. Sentiment analysis took %d ms, entity recognition took %d ms"
-                    .formatted(Thread.currentThread().getName(),r.text().length(),System.currentTimeMillis()-start,sentimentTime,entityTime));
+                    .formatted(Thread.currentThread().getName(),r.text().length(),System.currentTimeMillis()-reviewStart,sentimentTime,entityTime));
 
             // Update review with sentiment and entities
             r.setEntities(entities);
@@ -237,7 +239,7 @@ public class mainWorkerClass {
 
         if(e instanceof TerminateException){
             if(uploadLogs && ! uploadBuffer.isEmpty()){
-                appendToS3(uploadLogName, uploadBuffer.toString());
+                appendToS3("logs/"+uploadLogName, uploadBuffer.toString());
             }
             System.exit(0);
         }

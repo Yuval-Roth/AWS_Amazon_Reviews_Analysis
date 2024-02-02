@@ -499,7 +499,7 @@ public class ManagerMainClass {
             }
         }
 
-        return """
+        String output = """
                 #!/bin/bash
                 cd /runtimedir
                 java -Xmx7000m -jar workerProgram.jar -workerId %d -inQueueUrl %s -outQueueUrl %s -managerQueueUrl %s -s3BucketName %s %s > output.log 2>&1
@@ -509,9 +509,9 @@ public class ManagerMainClass {
                 getQueueURL(WORKER_OUT_QUEUE_NAME),
                 getQueueURL(WORKER_MANAGEMENT_QUEUE_NAME),
                 BUCKET_NAME,
-                instanceIdCounter,
                 debugFlags
         );
+        return output;
     }
 
     private static void createBucketIfNotExists(String bucketName){
