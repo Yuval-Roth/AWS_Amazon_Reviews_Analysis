@@ -237,7 +237,7 @@ public class mainWorkerClass {
 
         if(e instanceof TerminateException){
             if(uploadLogs && ! uploadBuffer.isEmpty()){
-                appendToS3("logs/"+uploadLogName, uploadBuffer.toString());
+                appendToS3(uploadLogName, uploadBuffer.toString());
             }
             System.exit(0);
         }

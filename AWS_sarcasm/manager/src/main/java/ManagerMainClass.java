@@ -124,14 +124,19 @@ public class ManagerMainClass {
         shouldTerminate = new AtomicBoolean(false);
         requiredWorkers = new AtomicInteger(0);
 
-        createBucketIfNotExists(BUCKET_NAME);
-        createQueueIfNotExists(WORKER_IN_QUEUE_NAME,300);
-        createQueueIfNotExists(WORKER_OUT_QUEUE_NAME);
-        createQueueIfNotExists(WORKER_MANAGEMENT_QUEUE_NAME);
-        createQueueIfNotExists(USER_INPUT_QUEUE_NAME);
-        createQueueIfNotExists(USER_OUTPUT_QUEUE_NAME, 0);
+        boolean queuesCreated = false;
 
-        //TODO: wait until all queues are created before continuing
+        createBucketIfNotExists(BUCKET_NAME);
+        if(createQueueIfNotExists(WORKER_IN_QUEUE_NAME,300)) queuesCreated = true;
+        if(createQueueIfNotExists(WORKER_OUT_QUEUE_NAME)) queuesCreated = true;
+        if(createQueueIfNotExists(WORKER_MANAGEMENT_QUEUE_NAME)) queuesCreated = true;
+        if(createQueueIfNotExists(USER_INPUT_QUEUE_NAME)) queuesCreated = true;
+        if(createQueueIfNotExists(USER_OUTPUT_QUEUE_NAME, 0)) queuesCreated = true;
+
+        if(queuesCreated){
+            waitForQueuesCreation();
+        }
+
 
         final Exception[] exceptionHandler = new Exception[1];
 
@@ -157,6 +162,23 @@ public class ManagerMainClass {
                 exceptionHandler[0] = null;
             }
         }
+    }
+
+    private static void waitForQueuesCreation() {
+        boolean queuesReady;
+        do{
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException ignored) {}
+            queuesReady = new HashSet<>(sqs.listQueues().queueUrls())
+                    .containsAll(List.of(
+                            getQueueURL(WORKER_IN_QUEUE_NAME),
+                            getQueueURL(WORKER_OUT_QUEUE_NAME),
+                            getQueueURL(WORKER_MANAGEMENT_QUEUE_NAME),
+                            getQueueURL(USER_INPUT_QUEUE_NAME),
+                            getQueueURL(USER_OUTPUT_QUEUE_NAME)));
+
+        } while(! queuesReady);
     }
 
     private static void mainLoop(Exception[] exceptionHandler) {
@@ -469,17 +491,26 @@ public class ManagerMainClass {
 
     private static String getUserDataScript() {
 
+        String debugFlags = "";
+        if(debugMode){
+            debugFlags = "-d";
+            if(uploadLogs){
+                debugFlags += " -ul logs/worker-%d.log -ui %d".formatted(instanceIdCounter, appendLogIntervalInSeconds);
+            }
+        }
+
         return """
                 #!/bin/bash
                 cd /runtimedir
-                java -Xmx7000m -jar workerProgram.jar -workerId %d -inQueueUrl %s -outQueueUrl %s -managerQueueUrl %s -s3BucketName %s -d -ul worker_%d.log -ui 15 > output.log 2>&1
+                java -Xmx7000m -jar workerProgram.jar -workerId %d -inQueueUrl %s -outQueueUrl %s -managerQueueUrl %s -s3BucketName %s %s > output.log 2>&1
                 sudo shutdown -h now""".formatted(
                 instanceIdCounter,
                 getQueueURL(WORKER_IN_QUEUE_NAME),
                 getQueueURL(WORKER_OUT_QUEUE_NAME),
                 getQueueURL(WORKER_MANAGEMENT_QUEUE_NAME),
                 BUCKET_NAME,
-                instanceIdCounter
+                instanceIdCounter,
+                debugFlags
         );
     }
 
@@ -523,11 +554,11 @@ public class ManagerMainClass {
         }
     }
 
-    private static void createQueueIfNotExists(String queueName){
-        createQueueIfNotExists(queueName, null);
+    private static boolean createQueueIfNotExists(String queueName){
+        return createQueueIfNotExists(queueName, null);
     }
 
-    private static void createQueueIfNotExists(String queueName, Integer visibilityTimeout){
+    private static boolean createQueueIfNotExists(String queueName, Integer visibilityTimeout){
 
         boolean queueExists = sqs.listQueues(ListQueuesRequest.builder()
                 .queueNamePrefix(queueName)
@@ -548,7 +579,9 @@ public class ManagerMainClass {
                     .build();
 
             sqs.createQueue(createQueueRequest);
+            return true;
         }
+        return false;
     }
 
     private static void sendToQueue(String queueName, String messageBody) {
