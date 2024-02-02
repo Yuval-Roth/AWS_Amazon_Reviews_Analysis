@@ -229,8 +229,11 @@ public class ManagerMainClass {
                 try{
                     input = downloadFromS3(clientRequest.fileName());
                 } catch(NoSuchKeyException e){
+                    log("received client request: %s".formatted(clientRequest));
+                    log("File not found: %s".formatted(clientRequest.fileName()));
                     deleteFromQueue(message, USER_INPUT_QUEUE_NAME);
-                    sendToQueue(USER_OUTPUT_QUEUE_NAME, JsonUtils.serialize(new CompletedClientRequest(clientRequest.clientId(),clientRequest.requestId(), "File not found")));
+                    CompletedClientRequest fileNotFound = new CompletedClientRequest(clientRequest.clientId(), clientRequest.requestId(), "File not found");
+                    sendToQueue(USER_OUTPUT_QUEUE_NAME, JsonUtils.serialize(fileNotFound));
                     continue;
                 }
 
