@@ -495,11 +495,11 @@ public class ManagerMainClass {
         if(debugMode){
             debugFlags = "-d";
             if(uploadLogs){
-                debugFlags += " -ul logs/worker-%d.log -ui %d".formatted(instanceIdCounter, appendLogIntervalInSeconds);
+                debugFlags += " -ul worker-%d.log -ui %d".formatted(instanceIdCounter, appendLogIntervalInSeconds);
             }
         }
 
-        String output = """
+        return """
                 #!/bin/bash
                 cd /runtimedir
                 java -Xmx7000m -jar workerProgram.jar -workerId %d -inQueueUrl %s -outQueueUrl %s -managerQueueUrl %s -s3BucketName %s %s > output.log 2>&1
@@ -511,7 +511,6 @@ public class ManagerMainClass {
                 BUCKET_NAME,
                 debugFlags
         );
-        return output;
     }
 
     private static void createBucketIfNotExists(String bucketName){
