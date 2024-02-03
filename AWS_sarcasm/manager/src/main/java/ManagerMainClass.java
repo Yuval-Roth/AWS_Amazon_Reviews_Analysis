@@ -93,6 +93,8 @@ public class ManagerMainClass {
     private static AtomicBoolean shouldTerminate;
     private static Thread thread2;
     private static AtomicInteger requiredWorkers;
+    private static final int BATCH_REQUEST_MAX_BYTES = 262144;
+    private static final int BATCH_REQUEST_MAX_ENTRIES = 10;
     // </APPLICATION DATA>
 
 
@@ -239,161 +241,152 @@ public class ManagerMainClass {
                 .queueUrl(getQueueURL(USER_INPUT_QUEUE_NAME))
                 .build();
 
-        var r = sqs.receiveMessage(messageRequest);
 
-        if(r.hasMessages()){
+        ReceiveMessageResponse r;
+        do{
+            r = sqs.receiveMessage(messageRequest);
 
-            List<DeleteMessageBatchRequestEntry> deleteEntries = new LinkedList<>();
+            if(r.hasMessages()){
+                handleClientRequests(r.messages());
+                deleteBatchFromQueue(USER_INPUT_QUEUE_NAME, r.messages());
+            }
+        } while(r.hasMessages());
+    }
 
-            for(var message : r.messages()) {
+    private static void handleClientRequests(List<Message> messages){
 
-                // read message and create client request
-                ClientRequest clientRequest = JsonUtils.deserialize(message.body(), ClientRequest.class);
-                clientRequestIdToClientRequest.put(clientRequest.requestId(), clientRequest);
-                String input;
-                try{
-                    input = downloadFromS3(clientRequest.fileName());
-                } catch(NoSuchKeyException e){
-                    log("received client request: %s".formatted(clientRequest));
-                    log("File not found: %s".formatted(clientRequest.fileName()));
-                    deleteFromQueue(message, USER_INPUT_QUEUE_NAME);
-                    CompletedClientRequest fileNotFound = new CompletedClientRequest(clientRequest.clientId(), clientRequest.requestId(), "File not found");
-                    sendToQueue(USER_OUTPUT_QUEUE_NAME, JsonUtils.serialize(fileNotFound));
-                    continue;
-                }
+        for(var message : messages) {
 
-                if(clientRequest.terminate()){
-                    shouldTerminate.set(true);
-                }
-
-                // Deserialize client request fileName and split to small TitleReviews
-                String[] jsons = input.split("\n");
-                List<TitleReviews> largeTitleReviewsList = new LinkedList<>();
-                int reviewsCount = 0;
-                for (String json : jsons) {
-                    TitleReviews tr = JsonUtils.deserialize(json, TitleReviews.class);
-                    reviewsCount += addTitleReviews(tr, largeTitleReviewsList);
-                }
-                List<TitleReviews> smallTitleReviewsList = largeTitleReviewsList.stream()
-                        .flatMap(tr -> splitTitleReviews(tr, clientRequest.reviewsPerWorker()).stream())
-                        .toList();
-
-                // set reviews count in client request and add to required workers
-                clientRequest.setReviewsCount(reviewsCount);
-                addToAtomicInteger(clientRequest.requiredWorkers());
-
-                StringBuilder _attachedJobs = new StringBuilder("Attached jobs: [ ");
-
-                // split client request to jobs and send to workers
-                for (TitleReviews tr : smallTitleReviewsList) {
-
-                    // create job and increment job id
-                    String jsonJob = JsonUtils.serialize(tr);
-                    Job job = new Job(jobIdCounter++, Job.Action.PROCESS, jsonJob);
-                    String messageBody = JsonUtils.serialize(job);
-
-                    _attachedJobs.append(job.jobId()).append(" ");
-
-                    // map job id to client request id
-                    jobIdToClientRequestId.put(job.jobId(),clientRequest.requestId());
-                    clientRequest.incrementNumJobs();
-
-                    // send job to worker
-                    sendToQueue(WORKER_IN_QUEUE_NAME, messageBody);
-
-                }
-
-                _attachedJobs.append("]");
-                log("Received client request: %s".formatted(clientRequest));
-                log(_attachedJobs.toString());
-
-                // delete message from queue
-                deleteEntries.add(DeleteMessageBatchRequestEntry.builder()
-                        .id(UUID.randomUUID().toString())
-                        .receiptHandle(message.receiptHandle())
-                        .build());
+            // read message and create client request
+            ClientRequest clientRequest = JsonUtils.deserialize(message.body(), ClientRequest.class);
+            clientRequestIdToClientRequest.put(clientRequest.requestId(), clientRequest);
+            String input;
+            try{
+                input = downloadFromS3(clientRequest.fileName());
+            } catch(NoSuchKeyException e){
+                log("received client request: %s".formatted(clientRequest));
+                log("File not found: %s".formatted(clientRequest.fileName()));
+                CompletedClientRequest fileNotFound = new CompletedClientRequest(clientRequest.clientId(), clientRequest.requestId(), "File not found");
+                sendToQueue(USER_OUTPUT_QUEUE_NAME, JsonUtils.serialize(fileNotFound));
+                continue;
             }
 
-            // delete all messages from queue
-            if(! deleteEntries.isEmpty()) {
-                sqs.deleteMessageBatch(DeleteMessageBatchRequest.builder()
-                        .queueUrl(getQueueURL(USER_INPUT_QUEUE_NAME))
-                        .entries(deleteEntries)
-                        .build());
+            if(clientRequest.terminate()){
+                shouldTerminate.set(true);
             }
+
+            // Deserialize client request fileName and split to small TitleReviews
+            String[] jsons = input.split("\n");
+            List<TitleReviews> largeTitleReviewsList = new LinkedList<>();
+            int reviewsCount = 0;
+            for (String json : jsons) {
+                TitleReviews tr = JsonUtils.deserialize(json, TitleReviews.class);
+                reviewsCount += addTitleReviews(tr, largeTitleReviewsList);
+            }
+            // set reviews count in client request and add to required workers
+            clientRequest.setReviewsCount(reviewsCount);
+            addToAtomicInteger(clientRequest.requiredWorkers());
+
+
+            StringBuilder _attachedJobs = new StringBuilder("Attached jobs: [ "); // logging purposes
+
+            // split TitleReviews to small TitleReviews and create jobs
+            List<String> jobs = largeTitleReviewsList.stream()
+                    .flatMap(tr -> splitTitleReviews(tr, clientRequest.reviewsPerWorker()).stream())
+                    .map(JsonUtils::serialize)
+                    .map(trJson -> {
+                        int jobId = jobIdCounter++;
+                        _attachedJobs.append(jobId).append(" "); // logging purposes
+                        jobIdToClientRequestId.put(jobId,clientRequest.requestId());
+                        clientRequest.incrementNumJobs();
+                        return JsonUtils.serialize(new Job(jobId, Job.Action.PROCESS, trJson));
+                    })
+                    .toList();
+
+            sendBatchToQueue(WORKER_IN_QUEUE_NAME, jobs);
+
+            _attachedJobs.append("]"); // logging purposes
+            log("Received client request: %s".formatted(clientRequest));
+            log(_attachedJobs.toString());
         }
     }
+
     private static void checkForCompletedJobs() throws TerminateException {
 
         ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
                 .queueUrl(getQueueURL(WORKER_OUT_QUEUE_NAME))
                 .build();
 
-        var r = sqs.receiveMessage(messageRequest);
+        ReceiveMessageResponse r;
+        do{
+            r = sqs.receiveMessage(messageRequest);
 
-        if(r.hasMessages()){
-
-            for(var message : r.messages()) {
-                // read message and create job object
-                Job job = JsonUtils.deserialize(message.body(), Job.class);
-
-                // check if job was duplicated and already handled
-                if (jobIdToClientRequestId.containsKey(job.jobId())) {
-
-                    // job was not duplicated, handle normally
-
-                    if (job.action() != Job.Action.DONE) {
-                        throw new IllegalStateException("Received job with action " + job.action() + " from worker");
-                    }
-
-                    // get client request
-                    int clientRequestId = jobIdToClientRequestId.get(job.jobId());
-                    ClientRequest clientRequest = clientRequestIdToClientRequest.get(clientRequestId);
-
-                    // add job output to client request and decrement the number of jobs left
-                    // in the client request
-                    TitleReviews tr = JsonUtils.deserialize(job.data(), TitleReviews.class);
-                    clientRequest.addTitleReviews(tr);
-                    clientRequest.decrementNumJobs();
-
-                    log("Received completed job: %s (from client %s request %s)".formatted(job.jobId(),clientRequest.clientId(),clientRequest.requestId()));
-
-                    jobIdToClientRequestId.remove(job.jobId()); // remove job id from map
-
-                    // check if client request is done
-                    if (clientRequest.isDone()) {
-
-                        // upload client request output to s3
-                        String outputJson = clientRequest.getProcessedReviewsAsJson();
-                        String uploadedName = "completed_"+UUID.randomUUID()+"____"+clientRequest.fileName();
-                        uploadToS3(uploadedName, outputJson);
-
-                        // send completed notification to user
-                        CompletedClientRequest completedReq = clientRequest.getCompletedRequest(uploadedName);
-                        sendToQueue(USER_OUTPUT_QUEUE_NAME, JsonUtils.serialize(completedReq));
-
-                        // mark client request as done
-                        clientRequestIdToClientRequest.remove(clientRequestId);
-
-                        // decrement required workers
-                        addToAtomicInteger(-clientRequest.requiredWorkers());
-
-                        log("Completed client request: %s".formatted(clientRequest));
-
-                    }
-                }else {
-                    // job was duplicated, ignore
-                    log("Received duplicate job: %s".formatted(job.jobId()));
-                }
-
-                // delete message from queue
-                deleteFromQueue(message, WORKER_OUT_QUEUE_NAME);
+            if(r.hasMessages()) {
+                handleCompletedJobs(r.messages());
+                deleteBatchFromQueue(WORKER_OUT_QUEUE_NAME, r.messages());
             }
-        }
+        } while(r.hasMessages());
 
         if(shouldTerminate.get() && clientRequestIdToClientRequest.isEmpty()){
             log("Terminating");
             throw new TerminateException();
+        }
+    }
+
+    private static void handleCompletedJobs(List<Message> messages){
+
+        for (var message : messages) {
+            // read message and create job object
+            Job job = JsonUtils.deserialize(message.body(), Job.class);
+
+            // check if job was duplicated and already handled
+            if (jobIdToClientRequestId.containsKey(job.jobId())) {
+
+                // job was not duplicated, handle normally
+
+                if (job.action() != Job.Action.DONE) {
+                    throw new IllegalStateException("Received job with action " + job.action() + " from worker");
+                }
+
+                // get client request
+                int clientRequestId = jobIdToClientRequestId.get(job.jobId());
+                ClientRequest clientRequest = clientRequestIdToClientRequest.get(clientRequestId);
+
+                // add job output to client request and decrement the number of jobs left
+                // in the client request
+                TitleReviews tr = JsonUtils.deserialize(job.data(), TitleReviews.class);
+                clientRequest.addTitleReviews(tr);
+                clientRequest.decrementNumJobs();
+
+                log("Received completed job: %s (from client %s request %s)".formatted(job.jobId(), clientRequest.clientId(), clientRequest.requestId()));
+
+                jobIdToClientRequestId.remove(job.jobId()); // remove job id from map
+
+                // check if client request is done
+                if (clientRequest.isDone()) {
+
+                    // upload client request output to s3
+                    String outputJson = clientRequest.getProcessedReviewsAsJson();
+                    String uploadedName = "completed_" + UUID.randomUUID() + "____" + clientRequest.fileName();
+                    uploadToS3(uploadedName, outputJson);
+
+                    // send completed notification to user
+                    CompletedClientRequest completedReq = clientRequest.getCompletedRequest(uploadedName);
+                    sendToQueue(USER_OUTPUT_QUEUE_NAME, JsonUtils.serialize(completedReq));
+
+                    // mark client request as done
+                    clientRequestIdToClientRequest.remove(clientRequestId);
+
+                    // decrement required workers
+                    addToAtomicInteger(-clientRequest.requiredWorkers());
+
+                    log("Completed client request: %s".formatted(clientRequest));
+
+                }
+            } else {
+                // job was duplicated, ignore
+                log("Received duplicate job: %s".formatted(job.jobId()));
+            }
         }
     }
 
@@ -581,6 +574,57 @@ public class ManagerMainClass {
             return true;
         }
         return false;
+    }
+    private static void deleteBatchFromQueue(String queueName, List<Message> messages){
+        sqs.deleteMessageBatch(DeleteMessageBatchRequest.builder()
+                .queueUrl(getQueueURL(queueName))
+                .entries(messages.stream()
+                        .map(message -> DeleteMessageBatchRequestEntry.builder()
+                                .id(UUID.randomUUID().toString())
+                                .receiptHandle(message.receiptHandle())
+                                .build())
+                        .toList())
+                .build());
+    }
+
+    private static void sendBatchToQueue(String queueName, List<String> messageBodies) {
+
+        List<List<String>> batches = splitMessagesToBatches(messageBodies);
+        for(List<String> b : batches){
+            sqs.sendMessageBatch(SendMessageBatchRequest.builder()
+                    .queueUrl(getQueueURL(queueName))
+                    .entries(b.stream()
+                            .map(messageBody -> SendMessageBatchRequestEntry.builder()
+                                    .id(UUID.randomUUID().toString())
+                                    .messageBody(messageBody)
+                                    .build())
+                            .toList())
+                    .build());
+        }
+    }
+
+    private static List<List<String>> splitMessagesToBatches(List<String> messageBodies) {
+        List<List<String>> batches = new LinkedList<>();
+
+        List<String> currentBatch = new LinkedList<>();
+        int currentBatchBytes = 0;
+        for(String messageBody : messageBodies){
+
+            if(currentBatch.size() + 1 == BATCH_REQUEST_MAX_ENTRIES
+                || currentBatchBytes + messageBody.getBytes().length > BATCH_REQUEST_MAX_BYTES){
+
+                batches.add(currentBatch);
+                currentBatch = new LinkedList<>();
+                currentBatchBytes = 0;
+            }
+            currentBatch.add(messageBody);
+            currentBatchBytes += messageBody.getBytes().length;
+        }
+        if(! currentBatch.isEmpty()){
+            batches.add(currentBatch);
+        }
+
+        return batches;
     }
 
     private static void sendToQueue(String queueName, String messageBody) {
