@@ -428,11 +428,13 @@ public class ManagerMainClass {
                 }
                 workerCountLock.release();
             },exceptionHandler);
+            return;
         }
         // make sure that the number of workers in all states is between 0 and MAX_WORKERS
          else if(runningWorkersCount < requiredInstanceCount){
             startWorkers(delta);
          }
+        workerCountLock.release();
     }
 
     // ============================================================================ |
@@ -598,20 +600,24 @@ public class ManagerMainClass {
         return false;
     }
     private static void deleteBatchFromQueue(String queueName, List<Message> messages){
-        sqs.deleteMessageBatch(DeleteMessageBatchRequest.builder()
-                .queueUrl(getQueueURL(queueName))
-                .entries(messages.stream()
-                        .map(message -> DeleteMessageBatchRequestEntry.builder()
-                                .id(UUID.randomUUID().toString())
-                                .receiptHandle(message.receiptHandle())
-                                .build())
-                        .toList())
-                .build());
+
+        List<List<Message>> batches = splitDeleteMessagesToBatches(messages);
+        for(List<Message> b : batches){
+            sqs.deleteMessageBatch(DeleteMessageBatchRequest.builder()
+                    .queueUrl(getQueueURL(queueName))
+                    .entries(b.stream()
+                            .map(message -> DeleteMessageBatchRequestEntry.builder()
+                                    .id(UUID.randomUUID().toString())
+                                    .receiptHandle(message.receiptHandle())
+                                    .build())
+                            .toList())
+                    .build());
+        }
     }
 
     private static void sendBatchToQueue(String queueName, List<String> messageBodies) {
 
-        List<List<String>> batches = splitMessagesToBatches(messageBodies);
+        List<List<String>> batches = splitSendMessagesToBatches(messageBodies);
         for(List<String> b : batches){
             sqs.sendMessageBatch(SendMessageBatchRequest.builder()
                     .queueUrl(getQueueURL(queueName))
@@ -625,22 +631,46 @@ public class ManagerMainClass {
         }
     }
 
-    private static List<List<String>> splitMessagesToBatches(List<String> messageBodies) {
+    private static List<List<String>> splitSendMessagesToBatches(List<String> messageBodies) {
         List<List<String>> batches = new LinkedList<>();
 
         List<String> currentBatch = new LinkedList<>();
         int currentBatchBytes = 0;
-        for(String messageBody : messageBodies){
+        for(String message : messageBodies){
 
             if(currentBatch.size() + 1 == BATCH_REQUEST_MAX_ENTRIES
-                || currentBatchBytes + messageBody.getBytes().length > BATCH_REQUEST_MAX_BYTES){
+                    || currentBatchBytes + message.getBytes().length > BATCH_REQUEST_MAX_BYTES){
 
                 batches.add(currentBatch);
                 currentBatch = new LinkedList<>();
                 currentBatchBytes = 0;
             }
-            currentBatch.add(messageBody);
-            currentBatchBytes += messageBody.getBytes().length;
+            currentBatch.add(message);
+            currentBatchBytes += message.getBytes().length;
+        }
+        if(! currentBatch.isEmpty()){
+            batches.add(currentBatch);
+        }
+
+        return batches;
+    }
+
+    private static List<List<Message>> splitDeleteMessagesToBatches(List<Message> messageBodies) {
+        List<List<Message>> batches = new LinkedList<>();
+
+        List<Message> currentBatch = new LinkedList<>();
+        int currentBatchBytes = 0;
+        for(Message message : messageBodies){
+
+            if(currentBatch.size() + 1 == BATCH_REQUEST_MAX_ENTRIES
+                || currentBatchBytes + message.body().getBytes().length > BATCH_REQUEST_MAX_BYTES){
+
+                batches.add(currentBatch);
+                currentBatch = new LinkedList<>();
+                currentBatchBytes = 0;
+            }
+            currentBatch.add(message);
+            currentBatchBytes += message.body().getBytes().length;
         }
         if(! currentBatch.isEmpty()){
             batches.add(currentBatch);
