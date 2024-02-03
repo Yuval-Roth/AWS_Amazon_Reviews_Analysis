@@ -218,8 +218,8 @@ public class ManagerMainClass {
                     nextClientRequestCheck = System.currentTimeMillis() + 5000;
                 }
 
-                if(System.currentTimeMillis() >= nextWorkerCountCheck) {
-                    balanceInstanceCount();
+                if(System.currentTimeMillis() >= nextWorkerCountCheck && workerCountLock.tryAcquire()) {
+                    balanceInstanceCount(exceptionHandler);
                     nextWorkerCountCheck = System.currentTimeMillis() + 5000;
                 }
 
@@ -409,7 +409,7 @@ public class ManagerMainClass {
         }
     }
 
-    private static void balanceInstanceCount() {
+    private static void balanceInstanceCount(Exception[] exceptionHandler) {
 
         if(noEc2) return;
 
@@ -419,12 +419,15 @@ public class ManagerMainClass {
 
         // if the number of running workers is greater than the required number, stop workers
         if(runningWorkersCount > requiredInstanceCount){
-            stopWorkers(delta);
-            while(getWorkerCount(InstanceStateName.RUNNING) != requiredInstanceCount){
-                try {
-                    Thread.sleep(1000);
-                } catch (InterruptedException ignored) {}
-            }
+            executeLater(()->{
+                stopWorkers(delta);
+                while(getWorkerCount(InstanceStateName.RUNNING) != requiredInstanceCount){
+                    try {
+                        Thread.sleep(1000);
+                    } catch (InterruptedException ignored) {}
+                }
+                workerCountLock.release();
+            },exceptionHandler);
         }
         // make sure that the number of workers in all states is between 0 and MAX_WORKERS
          else if(runningWorkersCount < requiredInstanceCount){
