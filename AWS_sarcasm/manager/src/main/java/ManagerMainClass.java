@@ -12,7 +12,9 @@ import software.amazon.awssdk.services.sqs.model.*;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -91,7 +93,8 @@ public class ManagerMainClass {
     private static volatile long nextCompletedJobCheck;
     private static volatile long nextWorkerCountCheck;
     private static AtomicBoolean shouldTerminate;
-    private static Thread thread2;
+    private static Thread secondaryThread;
+    private static ThreadPoolExecutor executor;
     private static AtomicInteger requiredWorkers;
     private static final int BATCH_REQUEST_MAX_BYTES = 262144;
     private static final int BATCH_REQUEST_MAX_ENTRIES = 10;
@@ -125,6 +128,7 @@ public class ManagerMainClass {
         logUploadLock = new Semaphore(1);
         shouldTerminate = new AtomicBoolean(false);
         requiredWorkers = new AtomicInteger(0);
+        executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(2);
 
         boolean queuesCreated = false;
 
@@ -152,12 +156,12 @@ public class ManagerMainClass {
         }
 
         while(true){
-            thread2 = new Thread(()-> mainLoop(exceptionHandler),"secondary");
-            thread2.start();
+            secondaryThread = new Thread(()-> secondaryLoop(exceptionHandler),"secondary");
+            secondaryThread.start();
             mainLoop(exceptionHandler);
 
             try {
-                thread2.join();
+                secondaryThread.join();
             } catch (InterruptedException ignored) {}
             if(exceptionHandler[0] != null){
                 handleException(exceptionHandler[0]);
@@ -185,42 +189,52 @@ public class ManagerMainClass {
 
     private static void mainLoop(Exception[] exceptionHandler) {
 
-        Random rand = new Random();
         while(exceptionHandler[0] == null){
             try{
 
-                if(! shouldTerminate.get() && System.currentTimeMillis() >= nextClientRequestCheck && clientRequestsLock.tryAcquire()) {
-                    checkForClientRequests();
-                    nextClientRequestCheck = System.currentTimeMillis() + 5000;
-                    clientRequestsLock.release();
-                }
-
-                if(System.currentTimeMillis() >= nextCompletedJobCheck && completedJobsLock.tryAcquire()) {
-                    checkForCompletedJobs();
+                if(System.currentTimeMillis() >= nextCompletedJobCheck) {
+                    checkForCompletedJobs(exceptionHandler);
                     nextCompletedJobCheck = System.currentTimeMillis() + 1000;
-                    completedJobsLock.release();
                 }
 
-                if(System.currentTimeMillis() >= nextWorkerCountCheck && workerCountLock.tryAcquire()) {
+                try {
+                    Thread.sleep(Math.max(0,nextCompletedJobCheck - System.currentTimeMillis()));
+                } catch (InterruptedException ignored) {}
+
+            } catch (Exception e){
+                exceptionHandler[0] = e;
+                return;
+            }
+        }
+    }
+
+    private static void secondaryLoop(Exception[] exceptionHandler) {
+
+        long nextWakeup;
+        while(exceptionHandler[0] == null){
+            try{
+                if(! shouldTerminate.get() && System.currentTimeMillis() >= nextClientRequestCheck) {
+                    checkForClientRequests(exceptionHandler);
+                    nextClientRequestCheck = System.currentTimeMillis() + 5000;
+                }
+
+                if(System.currentTimeMillis() >= nextWorkerCountCheck) {
                     balanceInstanceCount();
                     nextWorkerCountCheck = System.currentTimeMillis() + 5000;
-                    workerCountLock.release();
                 }
 
-                if(uploadLogs && System.currentTimeMillis() >= nextLogUpload && logUploadLock.tryAcquire()){
+                if(uploadLogs && System.currentTimeMillis() >= nextLogUpload){
                     if(! uploadBuffer.isEmpty()){
                         appendToS3("logs/"+uploadLogName, uploadBuffer.toString());
                         uploadBuffer = new StringBuilder();
                     }
                     nextLogUpload = System.currentTimeMillis() + (appendLogIntervalInSeconds * 1000L);
-                    logUploadLock.release();
                 }
 
-                long nextWakeup = min(nextClientRequestCheck, nextCompletedJobCheck, nextWorkerCountCheck, nextLogUpload);
-                int randomTime = rand.nextInt(0,20);
+                nextWakeup = min(nextClientRequestCheck, nextWorkerCountCheck, nextLogUpload);
 
                 try {
-                    Thread.sleep(Math.max(0,(nextWakeup+randomTime) - System.currentTimeMillis()));
+                    Thread.sleep(Math.max(0,nextWakeup - System.currentTimeMillis()));
                 } catch (InterruptedException ignored) {}
 
             } catch (Exception e){
@@ -231,16 +245,18 @@ public class ManagerMainClass {
     }
 
 
+
+
     // ============================================================================ |
     // ========================  MAIN FLOW FUNCTIONS  ============================= |
     // ============================================================================ |
 
-    private static void checkForClientRequests() {
+    private static void checkForClientRequests(Exception[] exceptionHandler) {
 
         ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
                 .queueUrl(getQueueURL(USER_INPUT_QUEUE_NAME))
+                .waitTimeSeconds(2)
                 .build();
-
 
         ReceiveMessageResponse r;
         do{
@@ -248,7 +264,8 @@ public class ManagerMainClass {
 
             if(r.hasMessages()){
                 handleClientRequests(r.messages());
-                deleteBatchFromQueue(USER_INPUT_QUEUE_NAME, r.messages());
+                ReceiveMessageResponse finalR = r;
+                executeLater(()->deleteBatchFromQueue(USER_INPUT_QUEUE_NAME, finalR.messages()),exceptionHandler);
             }
         } while(r.hasMessages());
     }
@@ -311,10 +328,11 @@ public class ManagerMainClass {
         }
     }
 
-    private static void checkForCompletedJobs() throws TerminateException {
+    private static void checkForCompletedJobs(Exception[] exceptionHandler) throws TerminateException {
 
         ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
                 .queueUrl(getQueueURL(WORKER_OUT_QUEUE_NAME))
+                .waitTimeSeconds(2)
                 .build();
 
         ReceiveMessageResponse r;
@@ -323,7 +341,8 @@ public class ManagerMainClass {
 
             if(r.hasMessages()) {
                 handleCompletedJobs(r.messages());
-                deleteBatchFromQueue(WORKER_OUT_QUEUE_NAME, r.messages());
+                ReceiveMessageResponse finalR = r;
+                executeLater(()->deleteBatchFromQueue(WORKER_OUT_QUEUE_NAME, finalR.messages()),exceptionHandler);
             }
         } while(r.hasMessages());
 
@@ -797,6 +816,17 @@ public class ManagerMainClass {
             }
         }
         return min;
+    }
+
+    private static void executeLater(Runnable r,Exception[] exceptionHandler){
+        executor.execute(()->{
+            try{
+                r.run();
+            } catch (Exception e){
+                exceptionHandler[0] = e;
+            }
+        });
+
     }
 
     private static void readArgs(String[] args) {
