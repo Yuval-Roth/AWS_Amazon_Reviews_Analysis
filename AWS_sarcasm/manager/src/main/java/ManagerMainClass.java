@@ -1,9 +1,8 @@
-
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.ec2.Ec2Client;
-import software.amazon.awssdk.services.ec2.model.*;
 import software.amazon.awssdk.services.ec2.model.Tag;
+import software.amazon.awssdk.services.ec2.model.*;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.*;
 import software.amazon.awssdk.services.sqs.SqsClient;
@@ -12,13 +11,11 @@ import software.amazon.awssdk.services.sqs.model.*;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Collectors;
 
 public class ManagerMainClass {
 
@@ -89,7 +86,6 @@ public class ManagerMainClass {
     private static volatile Map<Integer, Integer> jobIdToClientRequestId;
     private static Semaphore workerCountLock;
     private static volatile long nextClientRequestCheck;
-    private static volatile long nextCompletedJobCheck;
     private static volatile long nextWorkerCountCheck;
     private static AtomicBoolean shouldTerminate;
     private static ThreadPoolExecutor executor;
@@ -227,7 +223,7 @@ public class ManagerMainClass {
             }
         }
     }
-    
+
     // ============================================================================ |
     // ========================  MAIN FLOW FUNCTIONS  ============================= |
     // ============================================================================ |
