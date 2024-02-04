@@ -1,12 +1,12 @@
 import software.amazon.awssdk.core.sync.RequestBody;
-import software.amazon.awssdk.protocols.jsoncore.JsonWriter;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.ec2.Ec2Client;
 import software.amazon.awssdk.services.ec2.model.*;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.sqs.SqsClient;
-import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
+import software.amazon.awssdk.services.sqs.model.*;
 
 import java.io.*;
 import java.util.*;
@@ -73,8 +73,26 @@ public class ClientMainClass {
         clientId = UUID.randomUUID().toString();
         clientRequestMap = new HashMap<>();
         clientRequestsStatusMap = new HashMap<>();
-
+        final Exception[] exceptionHandler = new Exception[1];
         scanner = new Scanner(System.in);
+        while(true) {
+            Thread secondaryThread = new Thread(()->secondaryLoop(exceptionHandler) ,"secondary");
+            secondaryThread.start();
+            mainLoop();
+            try {
+                secondaryThread.join();
+            } catch (InterruptedException ignored) {}
+            if(exceptionHandler[0] != null){
+                getHandleException(exceptionHandler);
+                exceptionHandler[0] = null;
+            }
+        }
+    }
+
+    private static void getHandleException(Exception[] exceptionHandler) {
+    }
+
+    private static void mainLoop() {
         while(true){
             System.out.println("Choose an option:");
             System.out.println("1. Send new request");
@@ -89,6 +107,53 @@ public class ClientMainClass {
         }
     }
 
+    private static void secondaryLoop(Exception[] exceptionHandler) {
+        while(exceptionHandler[0] == null){
+            try{
+                checkForFinishedRequests();
+            } catch (Exception e){
+                exceptionHandler[0] = e;
+                return;
+            }
+        }
+    }
+
+    private static void checkForFinishedRequests(){
+        ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
+                .queueUrl(getQueueURL(USER_OUTPUT_QUEUE_NAME))
+                .waitTimeSeconds(1)
+                .build();
+
+        ReceiveMessageResponse r;
+        do{
+            r = sqs.receiveMessage(messageRequest);
+            if(r.hasMessages()){
+                handleFinishedRequests(r.messages());
+            }
+        } while(r.hasMessages());
+    }
+
+    private static void handleFinishedRequests(List<Message> messages) {
+        for(Message m: messages){
+            CompletedClientRequest completedRequest = JsonUtils.deserialize(m.body(),CompletedClientRequest.class);
+            if(completedRequest.clientId().equals(clientId)){
+                clientRequestsStatusMap.put(completedRequest.requestId(), Status.DONE);
+                String output = downloadFromS3(completedRequest.output());
+                createHtmlFile(output);
+                deleteFromQueue(m,USER_OUTPUT_QUEUE_NAME);
+            }
+        }
+    }
+
+    private static void deleteFromQueue(Message message, String queueName) {
+        sqs.deleteMessage(DeleteMessageRequest.builder()
+                .queueUrl(getQueueURL(queueName))
+                .receiptHandle(message.receiptHandle())
+                .build());
+    }
+
+    private static void createHtmlFile(String output) {
+    }
 
     private static void openFinishedRequest() {
         System.out.println("Enter request id:");
@@ -187,6 +252,21 @@ public class ClientMainClass {
                 .bucket(BUCKET_NAME)
                 .key("files/"+ fileName)
                 .build(), RequestBody.fromString(input));
+    }
+
+    private static String downloadFromS3(String key) {
+        var r = s3.getObject(GetObjectRequest.builder()
+                .bucket(BUCKET_NAME)
+                .key("files/"+key).build());
+
+        // get file from response
+        byte[] file = {};
+        try {
+            file = r.readAllBytes();
+        } catch (IOException e) {
+//            handleException(e);
+        }
+        return new String(file);
     }
 
     public static String readInputFile(String fileName){

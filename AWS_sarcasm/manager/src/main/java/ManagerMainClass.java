@@ -358,7 +358,7 @@ public class ManagerMainClass {
 
                     // upload client request output to s3
                     String outputJson = clientRequest.getProcessedReviewsAsJson();
-                    String uploadedName = "completed_" + UUID.randomUUID() + "____" + clientRequest.fileName();
+                    String uploadedName =  clientRequest.fileName() + "_completed";
                     uploadToS3(uploadedName, outputJson);
 
                     // send completed notification to user
