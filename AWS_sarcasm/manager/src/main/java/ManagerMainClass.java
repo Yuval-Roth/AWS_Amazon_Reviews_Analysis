@@ -12,11 +12,13 @@ import software.amazon.awssdk.services.sqs.model.*;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 public class ManagerMainClass {
 
@@ -77,7 +79,6 @@ public class ManagerMainClass {
     private static volatile StringBuilder uploadBuffer;
     private static volatile long nextLogUpload;
     private static String uploadLogName;
-    private static Semaphore logUploadLock;
     // </DEBUG FLAGS>
 
 
@@ -86,14 +87,11 @@ public class ManagerMainClass {
     private static int jobIdCounter;
     private static volatile Map<Integer,ClientRequest> clientRequestIdToClientRequest;
     private static volatile Map<Integer, Integer> jobIdToClientRequestId;
-    private static Semaphore completedJobsLock;
-    private static Semaphore clientRequestsLock;
     private static Semaphore workerCountLock;
     private static volatile long nextClientRequestCheck;
     private static volatile long nextCompletedJobCheck;
     private static volatile long nextWorkerCountCheck;
     private static AtomicBoolean shouldTerminate;
-    private static Thread secondaryThread;
     private static ThreadPoolExecutor executor;
     private static AtomicInteger requiredWorkers;
     private static final int BATCH_REQUEST_MAX_BYTES = 262144;
@@ -122,10 +120,7 @@ public class ManagerMainClass {
         clientRequestIdToClientRequest = new HashMap<>();
         jobIdCounter = 0;
         instanceIdCounter = 2;
-        completedJobsLock = new Semaphore(1);
-        clientRequestsLock = new Semaphore(1);
         workerCountLock = new Semaphore(1);
-        logUploadLock = new Semaphore(1);
         shouldTerminate = new AtomicBoolean(false);
         requiredWorkers = new AtomicInteger(0);
         executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(2);
@@ -143,12 +138,8 @@ public class ManagerMainClass {
             waitForQueuesCreation();
         }
 
-
         final Exception[] exceptionHandler = new Exception[1];
 
-        nextClientRequestCheck = System.currentTimeMillis();
-        nextCompletedJobCheck = System.currentTimeMillis();
-        nextWorkerCountCheck = System.currentTimeMillis();
         if(uploadLogs){
             nextLogUpload = System.currentTimeMillis() + (appendLogIntervalInSeconds * 1000L);
         } else {
@@ -156,7 +147,7 @@ public class ManagerMainClass {
         }
 
         while(true){
-            secondaryThread = new Thread(()-> secondaryLoop(exceptionHandler),"secondary");
+            Thread secondaryThread = new Thread(()-> secondaryLoop(exceptionHandler),"secondary");
             secondaryThread.start();
             mainLoop(exceptionHandler);
 
@@ -191,16 +182,7 @@ public class ManagerMainClass {
 
         while(exceptionHandler[0] == null){
             try{
-
-                if(System.currentTimeMillis() >= nextCompletedJobCheck) {
-                    checkForCompletedJobs(exceptionHandler);
-                    nextCompletedJobCheck = System.currentTimeMillis() + 1000;
-                }
-
-                try {
-                    Thread.sleep(Math.max(0,nextCompletedJobCheck - System.currentTimeMillis()));
-                } catch (InterruptedException ignored) {}
-
+                checkForCompletedJobs(exceptionHandler);
             } catch (Exception e){
                 exceptionHandler[0] = e;
                 return;
@@ -215,11 +197,13 @@ public class ManagerMainClass {
             try{
                 if(! shouldTerminate.get() && System.currentTimeMillis() >= nextClientRequestCheck) {
                     checkForClientRequests(exceptionHandler);
-                    nextClientRequestCheck = System.currentTimeMillis() + 5000;
+                    nextClientRequestCheck = System.currentTimeMillis() + 3000;
                 }
 
-                if(System.currentTimeMillis() >= nextWorkerCountCheck && workerCountLock.tryAcquire()) {
-                    balanceInstanceCount(exceptionHandler);
+                if(System.currentTimeMillis() >= nextWorkerCountCheck ) {
+                    if(workerCountLock.tryAcquire()){
+                        balanceInstanceCount(exceptionHandler);
+                    }
                     nextWorkerCountCheck = System.currentTimeMillis() + 5000;
                 }
 
@@ -243,10 +227,7 @@ public class ManagerMainClass {
             }
         }
     }
-
-
-
-
+    
     // ============================================================================ |
     // ========================  MAIN FLOW FUNCTIONS  ============================= |
     // ============================================================================ |
@@ -255,7 +236,7 @@ public class ManagerMainClass {
 
         ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
                 .queueUrl(getQueueURL(USER_INPUT_QUEUE_NAME))
-                .waitTimeSeconds(2)
+                .waitTimeSeconds(1)
                 .build();
 
         ReceiveMessageResponse r;
@@ -263,14 +244,14 @@ public class ManagerMainClass {
             r = sqs.receiveMessage(messageRequest);
 
             if(r.hasMessages()){
-                handleClientRequests(r.messages());
+                handleClientRequests(r.messages(),exceptionHandler);
                 ReceiveMessageResponse finalR = r;
                 executeLater(()->deleteBatchFromQueue(USER_INPUT_QUEUE_NAME, finalR.messages()),exceptionHandler);
             }
         } while(r.hasMessages());
     }
 
-    private static void handleClientRequests(List<Message> messages){
+    private static void handleClientRequests(List<Message> messages, Exception[] exceptionHandler){
 
         for(var message : messages) {
 
@@ -284,7 +265,7 @@ public class ManagerMainClass {
                 log("received client request: %s".formatted(clientRequest));
                 log("File not found: %s".formatted(clientRequest.fileName()));
                 CompletedClientRequest fileNotFound = new CompletedClientRequest(clientRequest.clientId(), clientRequest.requestId(), "File not found");
-                sendToQueue(USER_OUTPUT_QUEUE_NAME, JsonUtils.serialize(fileNotFound));
+                executeLater(()->sendToQueue(USER_OUTPUT_QUEUE_NAME, JsonUtils.serialize(fileNotFound)),exceptionHandler);
                 continue;
             }
 
@@ -304,7 +285,6 @@ public class ManagerMainClass {
             clientRequest.setReviewsCount(reviewsCount);
             addToAtomicInteger(clientRequest.requiredWorkers());
 
-
             StringBuilder _attachedJobs = new StringBuilder("Attached jobs: [ "); // logging purposes
 
             // split TitleReviews to small TitleReviews and create jobs
@@ -320,11 +300,10 @@ public class ManagerMainClass {
                     })
                     .toList();
 
-            sendBatchToQueue(WORKER_IN_QUEUE_NAME, jobs);
+            executeLater(()->sendBatchToQueue(WORKER_IN_QUEUE_NAME, jobs),exceptionHandler);
 
             _attachedJobs.append("]"); // logging purposes
-            log("Received client request: %s".formatted(clientRequest));
-            log(_attachedJobs.toString());
+            log("Received client request: %s\n%s".formatted(clientRequest,_attachedJobs));
         }
     }
 
@@ -332,19 +311,16 @@ public class ManagerMainClass {
 
         ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
                 .queueUrl(getQueueURL(WORKER_OUT_QUEUE_NAME))
-                .waitTimeSeconds(2)
+                .waitTimeSeconds(20)
                 .build();
 
-        ReceiveMessageResponse r;
-        do{
-            r = sqs.receiveMessage(messageRequest);
+        ReceiveMessageResponse r = sqs.receiveMessage(messageRequest);
 
-            if(r.hasMessages()) {
-                handleCompletedJobs(r.messages());
-                ReceiveMessageResponse finalR = r;
-                executeLater(()->deleteBatchFromQueue(WORKER_OUT_QUEUE_NAME, finalR.messages()),exceptionHandler);
-            }
-        } while(r.hasMessages());
+        if(r.hasMessages()) {
+            handleCompletedJobs(r.messages());
+            ReceiveMessageResponse finalR = r;
+            executeLater(()->deleteBatchFromQueue(WORKER_OUT_QUEUE_NAME, finalR.messages()),exceptionHandler);
+        }
 
         if(shouldTerminate.get() && clientRequestIdToClientRequest.isEmpty()){
             log("Terminating");
@@ -750,18 +726,15 @@ public class ManagerMainClass {
         LocalDateTime now = LocalDateTime.now();
 
         if(e instanceof TerminateException){
-            stopWorkers(getWorkerCount(InstanceStateName.RUNNING));
+            if(workerCountLock.tryAcquire()){
+                stopWorkers(getWorkerCount(InstanceStateName.RUNNING));
+            }
             waitUntilAllWorkersStopped();
             if(uploadLogs && ! uploadBuffer.isEmpty()){
                 appendToS3("logs/"+uploadLogName, uploadBuffer.toString());
             }
             System.exit(0);
         }
-
-        //release all locks
-        completedJobsLock.release();
-        clientRequestsLock.release();
-        workerCountLock.release();
 
         String timeStamp = getTimeStamp(now);
         String logName = "errors/%s error_manager.log".formatted(timeStamp);
