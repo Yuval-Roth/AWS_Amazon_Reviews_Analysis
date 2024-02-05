@@ -177,10 +177,7 @@ public class ClientMainClass {
     }
 
     private static void showRequests() {
-        TablePrinter table = new TablePrinter()
-                .addColumn("Request id")
-                .addColumn("File name")
-                .addColumn("Status");
+        TablePrinter table = new TablePrinter("Request id","File name","Status");
         for (Map.Entry<Integer, ClientRequest> entry : clientRequestMap.entrySet()) {
             table.addEntry(entry.getKey().toString(),
                     entry.getValue().fileName(),

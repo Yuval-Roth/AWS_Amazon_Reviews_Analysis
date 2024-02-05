@@ -5,16 +5,14 @@ public class TablePrinter {
     Map<String,List<String>> columns;
     Map<String,Integer> columnWidths;
 
-    public TablePrinter (){
-        this.columnNames = new LinkedList<>();
+    public TablePrinter (String... columnNames){
+        this.columnNames = Arrays.asList(columnNames);
         this.columns = new HashMap<>();
         this.columnWidths = new HashMap<>();
-    }
-
-    public TablePrinter addColumn(String columnName){
-        this.columnNames.add(columnName);
-        this.columns.put(columnName, new LinkedList<>());
-        return this;
+        for (String column : columnNames) {
+            columns.put(column, new LinkedList<>());
+            columnWidths.put(column, 0);
+        }
     }
 
     public void addEntry(String... entries) {
@@ -26,7 +24,7 @@ public class TablePrinter {
         int i = 0;
         for (String column : columnNames) {
             columns.get(column).add(entries[i]);
-            if (columnWidths.get(column) == null || columnWidths.get(column) < entries[i].length()) {
+            if (columnWidths.get(column) < entries[i].length()) {
                 columnWidths.put(column, entries[i].length());
             }
             i++;
