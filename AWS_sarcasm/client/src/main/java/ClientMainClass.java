@@ -201,7 +201,8 @@ public class ClientMainClass {
         String pathInS3 = "temp/%s/%s___%s".formatted(clientId, UUID.randomUUID(), fileName);
         uploadToS3(pathInS3, input);
         ClientRequest toSend = new ClientRequest(clientId, requestId, pathInS3, reviewsPerWorker, terminate);
-        clientRequestMap.put(requestId, toSend);
+        ClientRequest toSave = new ClientRequest(clientId, requestId, fileName, reviewsPerWorker, terminate);
+        clientRequestMap.put(requestId, toSave);
         clientRequestsStatusMap.put(requestId,Status.IN_PROGRESS);
         requestId++;
         sqs.sendMessage(SendMessageRequest.builder()
