@@ -53,7 +53,14 @@ public class ClientMainClass {
 
     enum Status {
         DONE,
-        IN_PROGRESS,
+        IN_PROGRESS;
+
+        public String toString(){
+            return switch(this){
+                case DONE -> "Done";
+                case IN_PROGRESS -> "In progress";
+            };
+        }
     }
     public static void main(String[] args) {
         sqs = SqsClient.builder()
@@ -73,36 +80,45 @@ public class ClientMainClass {
         clientId = UUID.randomUUID().toString();
         clientRequestMap = new HashMap<>();
         clientRequestsStatusMap = new HashMap<>();
-        final Exception[] exceptionHandler = new Exception[1];
         scanner = new Scanner(System.in);
+
+        final Exception[] exceptionHandler = new Exception[1];
         while(true) {
+
             Thread secondaryThread = new Thread(()->secondaryLoop(exceptionHandler) ,"secondary");
             secondaryThread.start();
-            mainLoop();
+            mainLoop(exceptionHandler);
+
             try {
                 secondaryThread.join();
             } catch (InterruptedException ignored) {}
             if(exceptionHandler[0] != null){
-                getHandleException(exceptionHandler);
+                handleException(exceptionHandler[0]);
                 exceptionHandler[0] = null;
             }
         }
     }
 
-    private static void getHandleException(Exception[] exceptionHandler) {
+    private static void handleException(Exception exceptionHandler) {
     }
 
-    private static void mainLoop() {
-        while(true){
-            System.out.println("Choose an option:");
-            System.out.println("1. Send new request");
-            System.out.println("2. Show requests");
-            System.out.println("3. Open finished request");
-            int choice = scanner.nextInt();
-            switch (choice){
-                case 1-> sendNewRequest();
-                case 2-> showRequests();
-                case 3-> openFinishedRequest();
+    private static void mainLoop(Exception[] exceptionHandler) {
+        while (exceptionHandler[0] == null) {
+            try {
+                System.out.println("Choose an option:");
+                System.out.println("1. Send new request");
+                System.out.println("2. Show requests");
+                System.out.println("3. Open finished request");
+                int choice = scanner.nextInt();
+                switch (choice) {
+                    case 1 -> sendNewRequest();
+                    case 2 -> showRequests();
+                    case 3 -> openFinishedRequest();
+                }
+            }
+            catch(Exception e) {
+                exceptionHandler[0] = e;
+                return;
             }
         }
     }
@@ -161,10 +177,16 @@ public class ClientMainClass {
     }
 
     private static void showRequests() {
-        System.out.println("Request id  |  File name  |  Status");
-        for(var entry: clientRequestMap.entrySet()){
-            System.out.printf("%d|%s|%s%n", entry.getKey(), entry.getValue().fileName(), clientRequestsStatusMap.get(entry.getKey()));
+        TablePrinter table = new TablePrinter()
+                .addColumn("Request id")
+                .addColumn("File name")
+                .addColumn("Status");
+        for (Map.Entry<Integer, ClientRequest> entry : clientRequestMap.entrySet()) {
+            table.addEntry(entry.getKey().toString(),
+                    entry.getValue().fileName(),
+                    clientRequestsStatusMap.get(entry.getKey()).toString());
         }
+        System.out.println(table);
     }
 
     private static void sendNewRequest() {
@@ -264,7 +286,7 @@ public class ClientMainClass {
         try {
             file = r.readAllBytes();
         } catch (IOException e) {
-//            handleException(e);
+            handleException(e);
         }
         return new String(file);
     }
