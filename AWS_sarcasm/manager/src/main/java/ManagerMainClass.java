@@ -357,7 +357,7 @@ public class ManagerMainClass {
                 if (clientRequest.isDone()) {
 
                     // upload client request output to s3
-                    String outputJson = clientRequest.getProcessedReviewsAsJson();
+                    String outputJson = clientRequest.getProcessedReviewsAsJsons();
                     String uploadedName =  clientRequest.fileName() + "_completed";
                     uploadToS3(uploadedName, outputJson);
 
@@ -722,9 +722,12 @@ public class ManagerMainClass {
         LocalDateTime now = LocalDateTime.now();
 
         if(e instanceof TerminateException){
-            if(workerCountLock.tryAcquire()){
-                stopWorkers(getWorkerCount(InstanceStateName.RUNNING));
-            }
+
+            do{
+                if(workerCountLock.tryAcquire()){
+                    stopWorkers(getWorkerCount(InstanceStateName.RUNNING));
+                }
+            } while(getWorkerCount(InstanceStateName.RUNNING) != 0);
             waitUntilAllWorkersStopped();
             if(uploadLogs && ! uploadBuffer.isEmpty()){
                 appendToS3("logs/"+uploadLogName, uploadBuffer.toString());

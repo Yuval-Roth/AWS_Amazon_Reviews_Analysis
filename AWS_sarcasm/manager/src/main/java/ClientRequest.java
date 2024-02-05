@@ -58,7 +58,7 @@ public final class ClientRequest {
         return numJobs == 0;
     }
 
-    public String getProcessedReviewsAsJson() {
+    public String getProcessedReviewsAsJsons() {
         StringBuilder sb = new StringBuilder();
         for (TitleReviews tr : output) {
             sb.append(JsonUtils.serialize(tr)).append('\n');

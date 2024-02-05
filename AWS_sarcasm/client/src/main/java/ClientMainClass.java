@@ -193,14 +193,14 @@ public class ClientMainClass {
         String terminate = scanner.next();
         Boolean terminateB = terminate.equals("t") ? true : terminate.equals("f") ? false : null;
         sendClientRequest(fileName,reviewsPerWorker,terminateB);
-        startManagerIfNotExists();
+//        startManagerIfNotExists();
     }
 
     private static void sendClientRequest(String fileName, int reviewsPerWorker, boolean terminate) {
         String input = readInputFile(fileName);
-        String path = "temp/%s/%s___%s".formatted(clientId, UUID.randomUUID(), fileName);
-        uploadToS3(path, input);
-        ClientRequest toSend = new ClientRequest(clientId, requestId, fileName, reviewsPerWorker, terminate);
+        String pathInS3 = "temp/%s/%s___%s".formatted(clientId, UUID.randomUUID(), fileName);
+        uploadToS3(pathInS3, input);
+        ClientRequest toSend = new ClientRequest(clientId, requestId, pathInS3, reviewsPerWorker, terminate);
         clientRequestMap.put(requestId, toSend);
         clientRequestsStatusMap.put(requestId,Status.IN_PROGRESS);
         requestId++;
@@ -215,7 +215,11 @@ public class ClientMainClass {
                 .filters(Filter.builder()
                         .name("tag:Name")
                         .values("ManagerInstance")
-                        .build())
+                        .build(),
+                        Filter.builder()
+                                .name("instance-state-name")
+                                .values("running")
+                                .build())
                 .build());
         boolean managerExists = 0 != r.reservations().stream()
                 .reduce(0, (acc, res) -> acc + res.instances().size(), Integer::sum);
