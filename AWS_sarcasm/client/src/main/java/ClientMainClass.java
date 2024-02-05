@@ -15,7 +15,6 @@ public class ClientMainClass {
 
     // <S3>
     public static final String BUCKET_NAME = "distributed-systems-2024-bucket-yuval-adi";
-    public static final int BIG_REVIEW_LENGTH = 800;
     private static S3Client s3;
     // </S3>
 
@@ -46,8 +45,9 @@ public class ClientMainClass {
     private static Scanner scanner;
 
     private static Map<Integer,ClientRequest> clientRequestMap;
-    private static Map<Integer,Status> clientRequestsStatusMap;
+    private static Map<Integer,Box<Status>> clientRequestsStatusMap;
     private static boolean noEc2;
+    private static TablePrinter requestTable;
 
     enum Status {
         DONE,
@@ -78,6 +78,7 @@ public class ClientMainClass {
         clientId = UUID.randomUUID().toString();
         clientRequestMap = new HashMap<>();
         clientRequestsStatusMap = new HashMap<>();
+        requestTable = new TablePrinter("Request id","File name","Status");
         scanner = new Scanner(System.in);
 
         final Exception[] exceptionHandler = new Exception[1];
@@ -151,7 +152,7 @@ public class ClientMainClass {
         for(Message m: messages){
             CompletedClientRequest completedRequest = JsonUtils.deserialize(m.body(),CompletedClientRequest.class);
             if(completedRequest.clientId().equals(clientId)){
-                clientRequestsStatusMap.put(completedRequest.requestId(), Status.DONE);
+                clientRequestsStatusMap.get(completedRequest.requestId()).set(Status.DONE);
                 String output = downloadFromS3(completedRequest.output());
                 createHtmlFile(output);
                 deleteFromQueue(m,USER_OUTPUT_QUEUE_NAME);
@@ -203,7 +204,9 @@ public class ClientMainClass {
         ClientRequest toSend = new ClientRequest(clientId, requestId, pathInS3, reviewsPerWorker, terminate);
         ClientRequest toSave = new ClientRequest(clientId, requestId, fileName, reviewsPerWorker, terminate);
         clientRequestMap.put(requestId, toSave);
-        clientRequestsStatusMap.put(requestId,Status.IN_PROGRESS);
+        Box<Status> statusBox = new Box<>(Status.IN_PROGRESS);
+        clientRequestsStatusMap.put(requestId, statusBox);
+        requestTable.addEntry(requestId,fileName,statusBox);
         requestId++;
         sqs.sendMessage(SendMessageRequest.builder()
                       .queueUrl(getQueueURL(USER_INPUT_QUEUE_NAME))

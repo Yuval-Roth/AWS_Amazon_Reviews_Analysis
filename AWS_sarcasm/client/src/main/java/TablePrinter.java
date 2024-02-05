@@ -2,7 +2,7 @@ import java.util.*;
 
 public class TablePrinter {
     List<String> columnNames;
-    Map<String,List<String>> columns;
+    Map<String,List<Object>> columns;
     Map<String,Integer> columnWidths;
 
     public TablePrinter (String... columnNames){
@@ -15,7 +15,7 @@ public class TablePrinter {
         }
     }
 
-    public void addEntry(String... entries) {
+    public void addEntry(Object... entries) {
 
         if (entries.length != this.columnNames.size()) {
             throw new IllegalArgumentException("Number of entries does not match number of columns");
@@ -24,8 +24,8 @@ public class TablePrinter {
         int i = 0;
         for (String column : columnNames) {
             columns.get(column).add(entries[i]);
-            if (columnWidths.get(column) < entries[i].length()) {
-                columnWidths.put(column, entries[i].length());
+            if (columnWidths.get(column) < entries[i].toString().length()) {
+                columnWidths.put(column, entries[i].toString().length());
             }
             i++;
         }
@@ -36,7 +36,7 @@ public class TablePrinter {
         StringBuilder sb = new StringBuilder();
 
         // create iterators for each column
-        List<Iterator<String>> iterators = columnNames.stream()
+        List<Iterator<Object>> iterators = columnNames.stream()
                 .map(c -> columns.get(c).iterator())
                 .collect(ArrayList::new, ArrayList::add, ArrayList::addAll);
 
@@ -56,7 +56,7 @@ public class TablePrinter {
             for(int i = 0; i < columnNames.size(); i++){
 
                 // get next value and padding adjusted for value length
-                String next = iterators.get(i).next();
+                String next = iterators.get(i).next().toString();
                 String padding = paddings[i].substring(next.length());
 
                 // build the row
