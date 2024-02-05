@@ -45,9 +45,8 @@ public class ClientMainClass {
     private static Scanner scanner;
 
     private static Map<Integer,ClientRequest> clientRequestMap;
-    private static Map<Integer,Box<Status>> clientRequestsStatusMap;
+    private static Map<Integer,Status> clientRequestsStatusMap;
     private static boolean noEc2;
-    private static TablePrinter requestTable;
 
     enum Status {
         DONE,
@@ -78,7 +77,6 @@ public class ClientMainClass {
         clientId = UUID.randomUUID().toString();
         clientRequestMap = new HashMap<>();
         clientRequestsStatusMap = new HashMap<>();
-        requestTable = new TablePrinter("Request id","File name","Status");
         scanner = new Scanner(System.in);
 
         Box<Exception> exceptionHandler = new Box<>(null);
@@ -153,7 +151,7 @@ public class ClientMainClass {
         for(Message m: messages){
             CompletedClientRequest completedRequest = JsonUtils.deserialize(m.body(),CompletedClientRequest.class);
             if(completedRequest.clientId().equals(clientId)){
-                clientRequestsStatusMap.get(completedRequest.requestId()).set(Status.DONE);
+                clientRequestsStatusMap.put(completedRequest.requestId(),Status.DONE);
                 String output = downloadFromS3(completedRequest.output());
                 createHtmlFile(output);
                 deleteFromQueue(m,USER_OUTPUT_QUEUE_NAME);
@@ -205,9 +203,7 @@ public class ClientMainClass {
         ClientRequest toSend = new ClientRequest(clientId, requestId, pathInS3, reviewsPerWorker, terminate);
         ClientRequest toSave = new ClientRequest(clientId, requestId, fileName, reviewsPerWorker, terminate);
         clientRequestMap.put(requestId, toSave);
-        Box<Status> statusBox = new Box<>(Status.IN_PROGRESS);
-        clientRequestsStatusMap.put(requestId, statusBox);
-        requestTable.addEntry(requestId,fileName,statusBox);
+        clientRequestsStatusMap.put(requestId, Status.IN_PROGRESS);
         requestId++;
         sqs.sendMessage(SendMessageRequest.builder()
                       .queueUrl(getQueueURL(USER_INPUT_QUEUE_NAME))
