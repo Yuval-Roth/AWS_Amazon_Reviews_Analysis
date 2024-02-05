@@ -8,13 +8,63 @@ import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.*;
 
+import java.awt.*;
 import java.io.*;
 import java.util.*;
+import java.util.List;
 
 public class ClientMainClass {
 
     // <S3>
     public static final String BUCKET_NAME = "distributed-systems-2024-bucket-yuval-adi";
+    private static final String BASE_HTML_DOC = """
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>%s</title>
+                <style>
+                    body {
+                        text-align: center;
+                        margin: 20px;
+                    }
+                    table {
+                        border-collapse: collapse;
+                        width: 80%;
+                        margin: 20px auto;
+                    }
+                            
+                    th, td {
+                        border: 1px solid #dddddd;
+                        text-align: left;
+                    }
+                    th {
+                        background-color: #f2f2f2;
+                    }
+                </style>
+            </head>
+            <body>
+            <h2>%s results</h2>
+            <table>
+                <tbody>
+                %s
+                </tbody>
+            </table>
+            </body>
+            </html>""";
+    private static final String BASE_ROW = """
+            <tr >
+                <td style="background-color: %s; width: 50px; height: 100px"></td>
+                <td>
+                    <ul style="line-height: 25px; padding-top: 0px; padding-bottom: 0px">
+                        <li style="padding-bottom: 5px; padding-top: 5px">Subject: %s</li>
+                        <li style="padding-bottom: 5px; padding-top: 5px"><a href="%s">%s</a></li>
+                        <li style="padding-bottom: 5px; padding-top: 5px">Entities: %s</li>
+                        <li style="padding-bottom: 5px; padding-top: 5px">Sarcasm: %s</li>
+                    </ul>
+                </td>
+            </tr>""";
     private static S3Client s3;
     // </S3>
 
@@ -80,7 +130,7 @@ public class ClientMainClass {
         scanner = new Scanner(System.in);
 
         Box<Exception> exceptionHandler = new Box<>(null);
-        
+
         while(true) {
 
             Thread secondaryThread = new Thread(()->secondaryLoop(exceptionHandler) ,"secondary");
@@ -95,9 +145,13 @@ public class ClientMainClass {
                 exceptionHandler.set(null);
             }
         }
+
+//        String output = readInputFile("output1.txt");
+//        createHtmlFile(output,"output1.txt");
     }
 
-    private static void handleException(Exception exceptionHandler) {
+    private static void handleException(Exception exception) {
+        exception.printStackTrace();
     }
 
     private static void mainLoop(Box<Exception> exceptionHandler) {
@@ -153,7 +207,7 @@ public class ClientMainClass {
             if(completedRequest.clientId().equals(clientId)){
                 clientRequestsStatusMap.put(completedRequest.requestId(),Status.DONE);
                 String output = downloadFromS3(completedRequest.output());
-                createHtmlFile(output);
+                createHtmlFile(output,clientRequestMap.get(completedRequest.requestId()).fileName());
                 deleteFromQueue(m,USER_OUTPUT_QUEUE_NAME);
             }
         }
@@ -166,12 +220,92 @@ public class ClientMainClass {
                 .build());
     }
 
-    private static void createHtmlFile(String output) {
+
+
+    private static void createHtmlFile(String output, String fileName) {
+
+        String[] jsons = output.split("\n");
+
+        List<TitleReviews> titleReviews = Arrays.stream(jsons)
+                .map(tr -> JsonUtils.<TitleReviews>deserialize(tr, TitleReviews.class))
+                .toList();
+
+        String[] baseRowParts = BASE_ROW.split("%s");
+
+        List<String> rows = new LinkedList<>();
+        for(TitleReviews tr: titleReviews){
+            for(Review r: tr.reviews()){
+                rows.add(baseRowParts[0] + getBackgroundColor(r.sentiment()) + baseRowParts[1] +
+                        tr.title() + baseRowParts[2] +
+                        r.link() + baseRowParts[3] +
+                        r.link() + baseRowParts[4] +
+                        r.entitiesToString() + baseRowParts[5] +
+                        isSarcasm(r.sentiment(),r.rating()) + baseRowParts[6]);
+            }
+        }
+
+        String[] baseHtmlDocParts = BASE_HTML_DOC.split("%s");
+        StringBuilder docBuilder = new StringBuilder();
+        docBuilder.append(baseHtmlDocParts[0]).append(fileName).append(baseHtmlDocParts[1]).append(fileName).append(baseHtmlDocParts[2]);
+        for(String row: rows){
+            docBuilder.append(row).append("\n");
+        }
+        docBuilder.append(baseHtmlDocParts[3]);
+
+        String pathToWrite = getFolderPath() + "/output files/" + fileName.substring(0, fileName.lastIndexOf(".")) + ".html";
+        File file = new File(pathToWrite);
+        file.getParentFile().mkdirs();
+        try(BufferedWriter writer = new BufferedWriter(new FileWriter(pathToWrite))){
+                writer.write(docBuilder.toString());
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+    }
+
+    private static String getBackgroundColor(Review.Sentiment sentiment) {
+
+        Color veryNegative = new Color(110, 1, 1);
+        Color negative = new Color(255, 51, 51, 255);
+        Color neutral = new Color(0, 0, 0);
+        Color positive = new Color(68, 232, 66);
+        Color veryPositive = new Color(2, 77, 0);
+
+        return switch(sentiment){
+            case VeryNegative -> colorToHex(veryNegative);
+            case Negative -> colorToHex(negative);
+            case Neutral -> colorToHex(neutral);
+            case Positive -> colorToHex(positive);
+            case VeryPositive -> colorToHex(veryPositive);
+        };
+    }
+
+    public static String colorToHex(Color color) {
+        int red = color.getRed();
+        int green = color.getGreen();
+        int blue = color.getBlue();
+
+        String hex = String.format("#%02X%02X%02X", red, green, blue);
+        return hex;
+    }
+
+
+    private static String isSarcasm(Review.Sentiment sentiment, int rating) {
+        if(sentiment.ordinal() >= 2 && rating < 3) return "Yes";
+        if(sentiment.ordinal() < 2 && rating >= 3) return "Yes";
+        return "No";
     }
 
     private static void openFinishedRequest() {
         System.out.println("Enter request id:");
         int requestId = scanner.nextInt();
+        if(clientRequestsStatusMap.get(requestId) == Status.DONE){
+            String path = getFolderPath() + "/output files/" + clientRequestMap.get(requestId).fileName().substring(0, clientRequestMap.get(requestId).fileName().lastIndexOf(".")) + ".html";
+            try {
+                Desktop.getDesktop().open(new File(path));
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
     }
 
     private static void showRequests() {
