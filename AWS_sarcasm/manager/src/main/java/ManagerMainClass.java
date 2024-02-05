@@ -896,7 +896,6 @@ public class ManagerMainClass {
         argsList.addAll(uploadLogOptions);
         argsList.addAll(uploadIntervalOptions);
         argsList.add("-noec2");
-        argsList.add("-workerimageid");
 
         for (int i = 0; i < args.length; i++) {
             String arg = args[i].toLowerCase();
