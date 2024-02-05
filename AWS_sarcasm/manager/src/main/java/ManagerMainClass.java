@@ -768,11 +768,17 @@ public class ManagerMainClass {
 
         if(e instanceof TerminateException){
 
+            executor.shutdown();
+            try {
+                while(! executor.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)){}
+            } catch (InterruptedException ignored) {}
+
             do{
                 if(workerCountLock.tryAcquire()){
                     stopWorkers(getWorkerCount(InstanceStateName.RUNNING));
                 }
             } while(getWorkerCount(InstanceStateName.RUNNING) != 0);
+
             waitUntilAllWorkersStopped();
             if(uploadLogs && ! uploadBuffer.isEmpty()){
                 appendToS3("logs/"+uploadLogName, uploadBuffer.toString());
