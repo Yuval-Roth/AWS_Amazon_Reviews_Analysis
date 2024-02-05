@@ -80,7 +80,7 @@
       <option name="presentableId" value="Default" />
       <updated>1707163485024</updated>
       <workItem from="1707163487283" duration="562000" />
-      <workItem from="1707164057225" duration="7160000" />
+      <workItem from="1707164057225" duration="10310000" />
     </task>
     <servers />
   </component>
@@ -94,11 +94,6 @@
           <properties class="java.util.UnknownFormatConversionException" package="java.util" />
           <option name="timeStamp" value="1" />
         </breakpoint>
-        <line-breakpoint enabled="true" type="java-line">
-          <url>file://$PROJECT_DIR$/src/main/java/ClientMainClass.java</url>
-          <line>272</line>
-          <option name="timeStamp" value="11" />
-        </line-breakpoint>
       </breakpoints>
     </breakpoint-manager>
   </component>

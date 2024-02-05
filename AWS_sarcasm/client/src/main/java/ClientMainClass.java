@@ -123,13 +123,12 @@ public class ClientMainClass {
                 .region(ec2_region)
                 .build();
 
-        debugMode = true;
 
         if(! noManager){
             var r =  ec2.describeImages(DescribeImagesRequest.builder()
                     .filters(Filter.builder()
                             .name("name")
-                            .values("workerImage")
+                            .values("managerImage")
                             .build())
                     .build());
             try{
@@ -139,7 +138,6 @@ public class ClientMainClass {
                 handleException(new TerminateException());
             }
         }
-
 
         requestId = 0;
         clientId = UUID.randomUUID().toString();
@@ -384,6 +382,9 @@ public class ClientMainClass {
     }
 
     private static void startManagerIfNotExists() {
+
+        if(noManager) return;
+
         var r = ec2.describeInstances(DescribeInstancesRequest.builder()
                 .filters(Filter.builder()
                         .name("tag:Name")
