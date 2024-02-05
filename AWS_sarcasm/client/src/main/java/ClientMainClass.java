@@ -10,6 +10,7 @@ import software.amazon.awssdk.services.sqs.model.*;
 
 import java.awt.*;
 import java.io.*;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.List;
 
@@ -69,8 +70,7 @@ public class ClientMainClass {
     // </S3>
 
     // <EC2>
-    public static final String MANAGER_IMAGE_ID = "ami-0a29504631300ea99";
-    public static final String WORKER_IMAGE_ID = "ami-0760b87e90e3ad1d9";
+    public static String MANAGER_IMAGE_ID;
     public static final String SECURITY_GROUP = "sg-00c67312e0a74a525";
     public static final String MANAGER_INSTANCE_TYPE = "t3.micro";
     private static Ec2Client ec2;
@@ -97,6 +97,7 @@ public class ClientMainClass {
     private static Map<Integer,ClientRequest> clientRequestMap;
     private static Map<Integer,Status> clientRequestsStatusMap;
     private static boolean noEc2;
+    private static boolean noManager;
 
     enum Status {
         DONE,
@@ -121,6 +122,23 @@ public class ClientMainClass {
         ec2 = Ec2Client.builder()
                 .region(ec2_region)
                 .build();
+
+        debugMode = true;
+
+        if(! noManager){
+            var r =  ec2.describeImages(DescribeImagesRequest.builder()
+                    .filters(Filter.builder()
+                            .name("name")
+                            .values("workerImage")
+                            .build())
+                    .build());
+            try{
+                MANAGER_IMAGE_ID = r.images().getFirst().imageId();
+            } catch(NoSuchElementException e){
+                log("No manager image found");
+                handleException(new TerminateException());
+            }
+        }
 
 
         requestId = 0;
@@ -295,6 +313,26 @@ public class ClientMainClass {
         return "No";
     }
 
+    private static void log(String message){
+        if(debugMode){
+            String timeStamp = getTimeStamp(LocalDateTime.now());
+//            if(uploadLogs){
+//                uploadBuffer.append(timeStamp).append(" ").append(message).append("\n");
+//            }
+            System.out.printf("%s %s%n",timeStamp,message);
+        }
+    }
+
+    private static String getTimeStamp(LocalDateTime now) {
+        return "[%s.%s.%s - %s:%s:%s]".formatted(
+                now.getDayOfMonth() > 9 ? now.getDayOfMonth() : "0"+ now.getDayOfMonth(),
+                now.getMonthValue() > 9 ? now.getMonthValue() : "0"+ now.getMonthValue(),
+                now.getYear(),
+                now.getHour() > 9 ? now.getHour() : "0"+ now.getHour(),
+                now.getMinute() > 9 ? now.getMinute() : "0"+ now.getMinute(),
+                now.getSecond() > 9 ? now.getSecond() : "0"+ now.getSecond());
+    }
+
     private static void openFinishedRequest() {
         System.out.println("Enter request id:");
         int requestId = scanner.nextInt();
@@ -326,8 +364,8 @@ public class ClientMainClass {
         System.out.print("Terminate(t/f): ");
         String terminate = scanner.next();
         Boolean terminateB = terminate.equals("t") ? true : terminate.equals("f") ? false : null;
+        startManagerIfNotExists();
         sendClientRequest(fileName,reviewsPerWorker,terminateB);
-//        startManagerIfNotExists();
     }
 
     private static void sendClientRequest(String fileName, int reviewsPerWorker, boolean terminate) {
@@ -358,6 +396,7 @@ public class ClientMainClass {
                 .build());
         boolean managerExists = 0 != r.reservations().stream()
                 .reduce(0, (acc, res) -> acc + res.instances().size(), Integer::sum);
+
         if (!managerExists) {
             RunInstancesRequest runRequest = RunInstancesRequest.builder()
                     .imageId(MANAGER_IMAGE_ID)
@@ -394,10 +433,8 @@ public class ClientMainClass {
         return """
                 #!/bin/bash
                 cd /runtimedir
-                java -jar managerProgram.jar -workerImageId %s %s > output.log 2>&1
-                sudo shutdown -h now""".formatted(WORKER_IMAGE_ID,
-                debugFlags
-        );
+                java -jar managerProgram.jar %s > output.log 2>&1
+                sudo shutdown -h now""".formatted(debugFlags);
     }
 
     private static String getQueueURL(String queueName){

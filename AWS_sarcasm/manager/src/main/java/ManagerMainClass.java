@@ -887,11 +887,6 @@ public class ManagerMainClass {
 
     private static void readArgs(String[] args) {
 
-        if(args.length == 0){
-            System.out.println();
-            printUsageAndExit("no arguments provided\n");
-        }
-
         List<String> helpOptions = List.of("-h","-help");
         List<String> debugModeOptions = List.of("-d","-debug");
         List<String> uploadLogOptions = List.of("-ul","-uploadlog");

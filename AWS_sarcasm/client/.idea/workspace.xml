@@ -7,7 +7,6 @@
     <list default="true" id="fffebb3a-095d-4b97-8f41-fb4e2f409895" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/java/ClientMainClass.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/ClientMainClass.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/Review.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/Review.java" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -34,7 +33,7 @@
     "git-widget-placeholder": "main",
     "ignore.virus.scanning.warn.message": "true",
     "kotlin-language-version-configured": "true",
-    "last_opened_file_path": "C:/Users/Yuval/git/Distributed_Systems_Assignment1/AWS_sarcasm/client/src/main/java",
+    "last_opened_file_path": "C:/Users/Yuval/git/Distributed_Systems_Assignment1/AWS_sarcasm/manager",
     "node.js.detected.package.eslint": "true",
     "node.js.detected.package.tslint": "true",
     "node.js.selected.package.eslint": "(autodetect)",
@@ -46,6 +45,9 @@
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="C:\Users\Yuval\git\Distributed_Systems_Assignment1\AWS_sarcasm\client\src\main\java" />
+    </key>
+    <key name="CopyClassDialog.RECENTS_KEY">
+      <recent name="" />
     </key>
   </component>
   <component name="RunManager">
@@ -78,7 +80,7 @@
       <option name="presentableId" value="Default" />
       <updated>1707163485024</updated>
       <workItem from="1707163487283" duration="562000" />
-      <workItem from="1707164057225" duration="5483000" />
+      <workItem from="1707164057225" duration="7160000" />
     </task>
     <servers />
   </component>
@@ -94,7 +96,7 @@
         </breakpoint>
         <line-breakpoint enabled="true" type="java-line">
           <url>file://$PROJECT_DIR$/src/main/java/ClientMainClass.java</url>
-          <line>254</line>
+          <line>272</line>
           <option name="timeStamp" value="11" />
         </line-breakpoint>
       </breakpoints>
