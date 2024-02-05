@@ -51,7 +51,7 @@ public class ManagerMainClass {
 
     // <DEBUG FLAGS>
     private static final String USAGE = """
-                Usage: java -jar managerProgram.jar [-workerImageId <workerImageId> | -h | -help] [optional debug flags]
+                Usage: java -jar managerProgram.jar [-h | -help] [optional debug flags]
                                     
                 -h | -help :- Print this message and exit.
                                     
@@ -112,6 +112,21 @@ public class ManagerMainClass {
                 .region(ec2_region)
                 .build();
 
+        if(! noEc2){
+            var r =  ec2.describeImages(DescribeImagesRequest.builder()
+                    .filters(Filter.builder()
+                            .name("name")
+                            .values("workerImage")
+                            .build())
+                    .build());
+            try{
+                WORKER_IMAGE_ID = r.images().getFirst().imageId();
+            } catch(NoSuchElementException e){
+                log("No worker image found");
+                handleException(new TerminateException());
+            }
+        }
+
         jobIdToClientRequestId = new HashMap<>();
         clientRequestIdToClientRequest = new HashMap<>();
         jobIdCounter = 0;
@@ -121,18 +136,15 @@ public class ManagerMainClass {
         requiredWorkers = new AtomicInteger(0);
         executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(2);
 
-        boolean queuesCreated = false;
+        log("Manager started");
+        log("Worker image id: %s".formatted(WORKER_IMAGE_ID));
+        log("Upload logs: %s".formatted(uploadLogs));
+        log("log name: %s".formatted(uploadLogName));
+        log("Upload interval: %s".formatted(appendLogIntervalInSeconds));
+        log("No EC2: %s".formatted(noEc2));
 
         createBucketIfNotExists(BUCKET_NAME);
-        if(createQueueIfNotExists(WORKER_IN_QUEUE_NAME,300)) queuesCreated = true;
-        if(createQueueIfNotExists(WORKER_OUT_QUEUE_NAME)) queuesCreated = true;
-        if(createQueueIfNotExists(WORKER_MANAGEMENT_QUEUE_NAME)) queuesCreated = true;
-        if(createQueueIfNotExists(USER_INPUT_QUEUE_NAME)) queuesCreated = true;
-        if(createQueueIfNotExists(USER_OUTPUT_QUEUE_NAME, 0)) queuesCreated = true;
-
-        if(queuesCreated){
-            waitForQueuesCreation();
-        }
+        createQueuesIfNotExists();
 
         Box<Exception> exceptionHandler = new Box<>(null);
 
@@ -155,23 +167,6 @@ public class ManagerMainClass {
                 exceptionHandler.set(null);
             }
         }
-    }
-
-    private static void waitForQueuesCreation() {
-        boolean queuesReady;
-        do{
-            try {
-                Thread.sleep(1000);
-            } catch (InterruptedException ignored) {}
-            queuesReady = new HashSet<>(sqs.listQueues().queueUrls())
-                    .containsAll(List.of(
-                            getQueueURL(WORKER_IN_QUEUE_NAME),
-                            getQueueURL(WORKER_OUT_QUEUE_NAME),
-                            getQueueURL(WORKER_MANAGEMENT_QUEUE_NAME),
-                            getQueueURL(USER_INPUT_QUEUE_NAME),
-                            getQueueURL(USER_OUTPUT_QUEUE_NAME)));
-
-        } while(! queuesReady);
     }
 
     private static void mainLoop(Box<Exception> exceptionHandler) {
@@ -412,6 +407,56 @@ public class ManagerMainClass {
     // ============================================================================ |
     // ========================  AWS API FUNCTIONS  =============================== |
     // ============================================================================ |
+
+    private static void createQueuesIfNotExists() {
+
+        boolean queuesCreated = false;
+
+        if(createQueueIfNotExists(WORKER_IN_QUEUE_NAME,300)) {
+            log("Created queue: %s".formatted(WORKER_IN_QUEUE_NAME));
+            queuesCreated = true;
+        }
+        if(createQueueIfNotExists(WORKER_OUT_QUEUE_NAME)) {
+            log("Created queue: %s".formatted(WORKER_OUT_QUEUE_NAME));
+            queuesCreated = true;
+        }
+        if(createQueueIfNotExists(WORKER_MANAGEMENT_QUEUE_NAME)) {
+            log("Created queue: %s".formatted(WORKER_MANAGEMENT_QUEUE_NAME));
+            queuesCreated = true;
+        }
+        if(createQueueIfNotExists(USER_INPUT_QUEUE_NAME)) {
+            log("Created queue: %s".formatted(USER_INPUT_QUEUE_NAME));
+            queuesCreated = true;
+        }
+        if(createQueueIfNotExists(USER_OUTPUT_QUEUE_NAME, 0)) {
+            log("Created queue: %s".formatted(USER_OUTPUT_QUEUE_NAME));
+            queuesCreated = true;
+        }
+
+        if(queuesCreated){
+            log("Waiting for queues creation");
+            waitForQueuesCreation();
+            log("Queues ready");
+        }
+    }
+
+    private static void waitForQueuesCreation() {
+        boolean queuesReady;
+        do{
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException ignored) {}
+            queuesReady = new HashSet<>(sqs.listQueues().queueUrls())
+                    .containsAll(List.of(
+                            getQueueURL(WORKER_IN_QUEUE_NAME),
+                            getQueueURL(WORKER_OUT_QUEUE_NAME),
+                            getQueueURL(WORKER_MANAGEMENT_QUEUE_NAME),
+                            getQueueURL(USER_INPUT_QUEUE_NAME),
+                            getQueueURL(USER_OUTPUT_QUEUE_NAME)));
+
+        } while(! queuesReady);
+    }
+
     private static String downloadFromS3(String key) {
         var r = s3.getObject(GetObjectRequest.builder()
                 .bucket(BUCKET_NAME)
@@ -857,20 +902,6 @@ public class ManagerMainClass {
             String arg = args[i].toLowerCase();
             String errorMessage;
 
-            if (arg.equals("-workerimageid")) {
-                errorMessage = "Missing worker image id\n";
-                if(argsList.contains(args[i+1])){
-                    printUsageAndExit(errorMessage);
-                }
-                try{
-                    WORKER_IMAGE_ID = args[i+1];
-                    i++;
-                    continue;
-                } catch(IndexOutOfBoundsException e){
-                    printUsageAndExit(errorMessage);
-                }
-            }
-
             if (debugModeOptions.contains(arg)) {
                 debugMode = true;
                 continue;
@@ -917,10 +948,6 @@ public class ManagerMainClass {
             printUsageAndExit("Unknown argument: %s\n".formatted(arg));
         }
 
-        if(WORKER_IMAGE_ID == null && ! noEc2){
-            printUsageAndExit("No worker image id was provided and 'noEc2' flag is not provided either\n");
-        }
-
         if(uploadLogs && ! debugMode){
             printUsageAndExit("Upload logs flag was provided but not debug mode flag\n");
         }
@@ -928,13 +955,6 @@ public class ManagerMainClass {
         if(uploadLogs && appendLogIntervalInSeconds == 0){
             appendLogIntervalInSeconds = 60;
         }
-
-        log("Manager started");
-        log("Worker image id: %s".formatted(WORKER_IMAGE_ID));
-        log("Upload logs: %s".formatted(uploadLogs));
-        log("log name: %s".formatted(uploadLogName));
-        log("Upload interval: %s".formatted(appendLogIntervalInSeconds));
-        log("No EC2: %s".formatted(noEc2));
     }
 }
 
