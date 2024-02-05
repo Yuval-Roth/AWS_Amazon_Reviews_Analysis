@@ -239,7 +239,7 @@ public class ManagerMainClass {
                 ReceiveMessageResponse finalR = r;
                 executeLater(()->deleteBatchFromQueue(USER_INPUT_QUEUE_NAME, finalR.messages()),exceptionHandler);
             }
-        } while(r.hasMessages());
+        } while(!shouldTerminate.get() && r.hasMessages());
     }
 
     private static void handleClientRequests(List<Message> messages, Box<Exception> exceptionHandler){
@@ -281,13 +281,14 @@ public class ManagerMainClass {
             // split TitleReviews to small TitleReviews and create jobs
             List<String> jobs = largeTitleReviewsList.stream()
                     .flatMap(tr -> splitTitleReviews(tr, clientRequest.reviewsPerWorker()).stream())
-                    .map(JsonUtils::serialize)
-                    .map(trJson -> {
+                    .map(tr -> {
                         int jobId = jobIdCounter++;
                         _attachedJobs.append(jobId).append(" "); // logging purposes
                         jobIdToClientRequestId.put(jobId,clientRequest.requestId());
                         clientRequest.incrementNumJobs();
-                        return JsonUtils.serialize(new Job(jobId, Job.Action.PROCESS, trJson));
+                        boolean highPriority = tr.reviews().size() == 1;
+                        String trJson = JsonUtils.serialize(tr);
+                        return JsonUtils.serialize(new Job(jobId, Job.Action.PROCESS, trJson, highPriority));
                     })
                     .toList();
 
@@ -412,7 +413,7 @@ public class ManagerMainClass {
 
         boolean queuesCreated = false;
 
-        if(createQueueIfNotExists(WORKER_IN_QUEUE_NAME,300)) {
+        if(createQueueIfNotExists(WORKER_IN_QUEUE_NAME,600)) {
             log("Created queue: %s".formatted(WORKER_IN_QUEUE_NAME));
             queuesCreated = true;
         }
@@ -768,11 +769,17 @@ public class ManagerMainClass {
 
         if(e instanceof TerminateException){
 
+            executor.shutdown();
+            try {
+                while(! executor.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)){}
+            } catch (InterruptedException ignored) {}
+
             do{
                 if(workerCountLock.tryAcquire()){
                     stopWorkers(getWorkerCount(InstanceStateName.RUNNING));
                 }
             } while(getWorkerCount(InstanceStateName.RUNNING) != 0);
+
             waitUntilAllWorkersStopped();
             if(uploadLogs && ! uploadBuffer.isEmpty()){
                 appendToS3("logs/"+uploadLogName, uploadBuffer.toString());
