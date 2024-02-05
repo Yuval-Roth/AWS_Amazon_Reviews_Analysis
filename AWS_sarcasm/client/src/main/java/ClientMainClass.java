@@ -20,13 +20,11 @@ public class ClientMainClass {
     // </S3>
 
     // <EC2>
-    public static final String MANAGER_IMAGE_ID = "";
-    public static final String WORKER_IMAGE_ID = "";
+    public static final String MANAGER_IMAGE_ID = "ami-0a29504631300ea99";
+    public static final String WORKER_IMAGE_ID = "ami-0760b87e90e3ad1d9";
     public static final String SECURITY_GROUP = "sg-00c67312e0a74a525";
     public static final String MANAGER_INSTANCE_TYPE = "t3.micro";
-    public static final int MANAGER_ID = 1;
     private static Ec2Client ec2;
-    private static int instanceIdCounter;
     // </EC2>
 
     // <SQS>
@@ -45,11 +43,11 @@ public class ClientMainClass {
     private static boolean uploadLogs;
 
     private static int appendLogIntervalInSeconds;
-    private static boolean noEc2;
     private static Scanner scanner;
 
     private static Map<Integer,ClientRequest> clientRequestMap;
     private static Map<Integer,Status> clientRequestsStatusMap;
+    private static boolean noEc2;
 
     enum Status {
         DONE,
@@ -75,7 +73,7 @@ public class ClientMainClass {
                 .region(ec2_region)
                 .build();
 
-        //startManagerIfNotExists();
+
         requestId = 0;
         clientId = UUID.randomUUID().toString();
         clientRequestMap = new HashMap<>();
@@ -195,6 +193,7 @@ public class ClientMainClass {
         String terminate = scanner.next();
         Boolean terminateB = terminate.equals("t") ? true : terminate.equals("f") ? false : null;
         sendClientRequest(fileName,reviewsPerWorker,terminateB);
+        startManagerIfNotExists();
     }
 
     private static void sendClientRequest(String fileName, int reviewsPerWorker, boolean terminate) {
