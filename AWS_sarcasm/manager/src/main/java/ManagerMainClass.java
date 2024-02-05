@@ -134,7 +134,7 @@ public class ManagerMainClass {
             waitForQueuesCreation();
         }
 
-        final Exception[] exceptionHandler = new Exception[1];
+        Box<Exception> exceptionHandler = new Box<>(null);
 
         if(uploadLogs){
             nextLogUpload = System.currentTimeMillis() + (appendLogIntervalInSeconds * 1000L);
@@ -150,9 +150,9 @@ public class ManagerMainClass {
             try {
                 secondaryThread.join();
             } catch (InterruptedException ignored) {}
-            if(exceptionHandler[0] != null){
-                handleException(exceptionHandler[0]);
-                exceptionHandler[0] = null;
+            if(exceptionHandler.get() != null){
+                handleException(exceptionHandler.get());
+                exceptionHandler.set(null);
             }
         }
     }
@@ -174,22 +174,22 @@ public class ManagerMainClass {
         } while(! queuesReady);
     }
 
-    private static void mainLoop(Exception[] exceptionHandler) {
+    private static void mainLoop(Box<Exception> exceptionHandler) {
 
-        while(exceptionHandler[0] == null){
+        while(exceptionHandler.get() == null){
             try{
                 checkForCompletedJobs(exceptionHandler);
             } catch (Exception e){
-                exceptionHandler[0] = e;
+                exceptionHandler.set(e);
                 return;
             }
         }
     }
 
-    private static void secondaryLoop(Exception[] exceptionHandler) {
+    private static void secondaryLoop(Box<Exception> exceptionHandler) {
 
         long nextWakeup;
-        while(exceptionHandler[0] == null){
+        while(exceptionHandler.get() == null){
             try{
                 if(! shouldTerminate.get() && System.currentTimeMillis() >= nextClientRequestCheck) {
                     checkForClientRequests(exceptionHandler);
@@ -218,7 +218,7 @@ public class ManagerMainClass {
                 } catch (InterruptedException ignored) {}
 
             } catch (Exception e){
-                exceptionHandler[0] = e;
+                exceptionHandler.set(e);
                 return;
             }
         }
@@ -228,7 +228,7 @@ public class ManagerMainClass {
     // ========================  MAIN FLOW FUNCTIONS  ============================= |
     // ============================================================================ |
 
-    private static void checkForClientRequests(Exception[] exceptionHandler) {
+    private static void checkForClientRequests(Box<Exception> exceptionHandler) {
 
         ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
                 .queueUrl(getQueueURL(USER_INPUT_QUEUE_NAME))
@@ -247,7 +247,7 @@ public class ManagerMainClass {
         } while(r.hasMessages());
     }
 
-    private static void handleClientRequests(List<Message> messages, Exception[] exceptionHandler){
+    private static void handleClientRequests(List<Message> messages, Box<Exception> exceptionHandler){
 
         for(var message : messages) {
 
@@ -303,7 +303,7 @@ public class ManagerMainClass {
         }
     }
 
-    private static void checkForCompletedJobs(Exception[] exceptionHandler) throws TerminateException {
+    private static void checkForCompletedJobs(Box<Exception> exceptionHandler) throws TerminateException {
 
         ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
                 .queueUrl(getQueueURL(WORKER_OUT_QUEUE_NAME))
@@ -381,7 +381,7 @@ public class ManagerMainClass {
         }
     }
 
-    private static void balanceInstanceCount(Exception[] exceptionHandler) {
+    private static void balanceInstanceCount(Box<Exception> exceptionHandler) {
 
         if(noEc2) return;
 
@@ -823,12 +823,12 @@ public class ManagerMainClass {
         return min;
     }
 
-    private static void executeLater(Runnable r,Exception[] exceptionHandler){
+    private static void executeLater(Runnable r,Box<Exception> exceptionHandler){
         executor.execute(()->{
             try{
                 r.run();
             } catch (Exception e){
-                exceptionHandler[0] = e;
+                exceptionHandler.set(e);
             }
         });
 

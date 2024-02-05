@@ -81,7 +81,8 @@ public class ClientMainClass {
         requestTable = new TablePrinter("Request id","File name","Status");
         scanner = new Scanner(System.in);
 
-        final Exception[] exceptionHandler = new Exception[1];
+        Box<Exception> exceptionHandler = new Box<>(null);
+        
         while(true) {
 
             Thread secondaryThread = new Thread(()->secondaryLoop(exceptionHandler) ,"secondary");
@@ -91,9 +92,9 @@ public class ClientMainClass {
             try {
                 secondaryThread.join();
             } catch (InterruptedException ignored) {}
-            if(exceptionHandler[0] != null){
-                handleException(exceptionHandler[0]);
-                exceptionHandler[0] = null;
+            if(exceptionHandler.get() != null){
+                handleException(exceptionHandler.get());
+                exceptionHandler.set(null);
             }
         }
     }
@@ -101,8 +102,8 @@ public class ClientMainClass {
     private static void handleException(Exception exceptionHandler) {
     }
 
-    private static void mainLoop(Exception[] exceptionHandler) {
-        while (exceptionHandler[0] == null) {
+    private static void mainLoop(Box<Exception> exceptionHandler) {
+        while (exceptionHandler.get() == null) {
             try {
                 System.out.println("Choose an option:");
                 System.out.println("1. Send new request");
@@ -116,18 +117,18 @@ public class ClientMainClass {
                 }
             }
             catch(Exception e) {
-                exceptionHandler[0] = e;
+                exceptionHandler.set(e);
                 return;
             }
         }
     }
 
-    private static void secondaryLoop(Exception[] exceptionHandler) {
-        while(exceptionHandler[0] == null){
+    private static void secondaryLoop(Box<Exception> exceptionHandler) {
+        while(exceptionHandler.get() == null){
             try{
                 checkForFinishedRequests();
             } catch (Exception e){
-                exceptionHandler[0] = e;
+                exceptionHandler.set(e);
                 return;
             }
         }
