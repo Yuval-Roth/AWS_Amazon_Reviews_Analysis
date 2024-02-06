@@ -13,11 +13,90 @@ import java.io.*;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class ClientMainClass {
+    enum Status {
+        DONE,
+        IN_PROGRESS;
+
+        public String toString(){
+            return switch(this){
+                case DONE -> "Done";
+                case IN_PROGRESS -> "In progress";
+            };
+        }
+    }
 
     // <S3>
     public static final String BUCKET_NAME = "distributed-systems-2024-bucket-yuval-adi";
+    private static final Region s3_region = Region.US_WEST_2;
+    private static S3Client s3;
+
+    // </S3>
+    // <EC2>
+    public static String MANAGER_IMAGE_ID;
+    public static final String SECURITY_GROUP = "sg-00c67312e0a74a525";
+    public static final String MANAGER_INSTANCE_TYPE = "t3.micro";
+    private static Ec2Client ec2;
+    private static final Region ec2_region = Region.US_EAST_1;
+
+    // </EC2>
+    // <SQS>
+    private static final String USER_INPUT_QUEUE_NAME = "userInputQueue";
+    private static final String USER_OUTPUT_QUEUE_NAME = "userOutputQueue";
+    private static final String SQS_DOMAIN_PREFIX = "https://sqs.us-east-1.amazonaws.com/057325794177/";
+    private static SqsClient sqs;
+
+    // </SQS>
+    // <DEBUG FLAGS>
+    private static final String USAGE = """
+                Usage: java -jar clientProgram.jar [-h | -help] [-d] [optional debug flags]
+                                    
+                -h | -help :- Print this message and exit.
+                                    
+                -d | -debug :- Run in debug mode, logging all operations to standard output
+                
+                optional debug flags:
+                    
+                    -ul | -uploadLog :- Ec2 instances will upload their logs to the S3 bucket.
+                                  Must be used with -debug.
+                                  
+                    -ui | -uploadInterval <interval in seconds> :- When combined with -uploadLog, specifies the interval in seconds
+                                  between log uploads to the S3 bucket.
+                                  Must be a positive integer, must be used with -uploadLog.
+                                  If this argument is not specified, defaults to 60 seconds.
+                                  
+                    -noEc2 :- Run without creating worker instances. Useful for debugging locally.
+                    
+                    -noManager :- Run without creating manager instance. Useful for debugging locally.
+                                  All other debug flags are ignored when this flag is used.
+                """;
+    private static volatile boolean debugMode;
+    private static volatile boolean noEc2;
+    private static volatile boolean uploadLogs;
+    private static volatile int appendLogIntervalInSeconds;
+    private static boolean noManager;
+
+    // </DEBUG FLAGS>
+
+    // <APPLICATION DATA>
+    private static String clientId;
+    private static int requestId;
+    private static Scanner scanner;
+    private static final String BASE_HTML_ROW = """
+            <tr >
+                <td style="background-color: %s; width: 50px; height: 100px"></td>
+                <td>
+                    <ul style="line-height: 25px; padding-top: 0px; padding-bottom: 0px">
+                        <li style="padding-bottom: 5px; padding-top: 5px">Subject: %s</li>
+                        <li style="padding-bottom: 5px; padding-top: 5px"><a href="%s">%s</a></li>
+                        <li style="padding-bottom: 5px; padding-top: 5px">Entities: %s</li>
+                        <li style="padding-bottom: 5px; padding-top: 5px">Sarcasm: %s</li>
+                    </ul>
+                </td>
+            </tr>""";
+
     private static final String BASE_HTML_DOC = """
             <!DOCTYPE html>
             <html lang="en">
@@ -54,88 +133,18 @@ public class ClientMainClass {
             </table>
             </body>
             </html>""";
-    private static final String BASE_ROW = """
-            <tr >
-                <td style="background-color: %s; width: 50px; height: 100px"></td>
-                <td>
-                    <ul style="line-height: 25px; padding-top: 0px; padding-bottom: 0px">
-                        <li style="padding-bottom: 5px; padding-top: 5px">Subject: %s</li>
-                        <li style="padding-bottom: 5px; padding-top: 5px"><a href="%s">%s</a></li>
-                        <li style="padding-bottom: 5px; padding-top: 5px">Entities: %s</li>
-                        <li style="padding-bottom: 5px; padding-top: 5px">Sarcasm: %s</li>
-                    </ul>
-                </td>
-            </tr>""";
-    private static S3Client s3;
-    // </S3>
-
-    // <EC2>
-    public static String MANAGER_IMAGE_ID;
-    public static final String SECURITY_GROUP = "sg-00c67312e0a74a525";
-    public static final String MANAGER_INSTANCE_TYPE = "t3.micro";
-    private static Ec2Client ec2;
-    // </EC2>
-
-    // <SQS>
-    private static final String USER_INPUT_QUEUE_NAME = "userInputQueue";
-    private static final String USER_OUTPUT_QUEUE_NAME = "userOutputQueue";
-    private static final String SQS_DOMAIN_PREFIX = "https://sqs.us-east-1.amazonaws.com/057325794177/";
-    private static SqsClient sqs;
-    // </SQS>
-
-    // <DEBUG FLAGS>
-    private static final String USAGE = """
-                Usage: java -jar clientProgram.jar [-h | -help] [-d] [optional debug flags]
-                                    
-                -h | -help :- Print this message and exit.
-                                    
-                -d | -debug :- Run in debug mode, logging all operations to standard output
-                
-                optional debug flags:
-                    
-                    -ul | -uploadLog <file name> :- logs will be uploaded to <file name> in the S3 bucket.
-                                  Must be used with -debug.
-                                  
-                    -ui | -uploadInterval <interval in seconds> :- When combined with -uploadLog, specifies the interval in seconds
-                                  between log uploads to the S3 bucket.
-                                  Must be a positive integer, must be used with -uploadLog.
-                                  If this argument is not specified, defaults to 60 seconds.
-                                  
-                    -noEc2 :- Run without creating worker instances. Useful for debugging locally.
-                    
-                    -noManager :- Run without creating manager instance. Useful for debugging locally.
-                                  All other debug flags are ignored when this flag is used.
-                """;
-    private static volatile boolean debugMode;
-    private static volatile boolean noEc2;
-    private static volatile boolean uploadLogs;
-    private static volatile int appendLogIntervalInSeconds;
-    private static String logName;
-    private static boolean noManager;
-    // </DEBUG FLAGS>
-
-    private static final Region ec2_region = Region.US_EAST_1;
-    private static final Region s3_region = Region.US_WEST_2;
-
-    private static String clientId;
-    private static int requestId;
-    private static Scanner scanner;
-
     private static Map<Integer,ClientRequest> clientRequestMap;
     private static Map<Integer,Status> clientRequestsStatusMap;
+    private static AtomicBoolean newFinishedRequest = new AtomicBoolean(false);
 
-    enum Status {
-        DONE,
-        IN_PROGRESS;
 
-        public String toString(){
-            return switch(this){
-                case DONE -> "Done";
-                case IN_PROGRESS -> "In progress";
-            };
-        }
-    }
+
+    // </APPLICATION DATA>
+
     public static void main(String[] args) {
+
+        readArgs(args);
+
         sqs = SqsClient.builder()
                 .region(ec2_region)
                 .build();
@@ -163,6 +172,7 @@ public class ClientMainClass {
                 handleException(new TerminateException());
             }
         }
+
 
         requestId = 0;
         clientId = UUID.randomUUID().toString();
@@ -202,11 +212,51 @@ public class ClientMainClass {
                 System.out.println("1. Send new request");
                 System.out.println("2. Show requests");
                 System.out.println("3. Open finished request");
-                int choice = scanner.nextInt();
+                System.out.println("4. Exit");
+                System.out.print(">> ");
+                String choice;
+
+                // wait for input or new finished request
+                while(System.in.available() == 0){
+
+                    // if there are new finished requests, ask the user if they want to see them
+                    if(newFinishedRequest.get()){
+                        newFinishedRequest.set(false);
+                        System.out.println("\r  \nThere are new finished requests, would you like to see them? (y/n)");
+                        System.out.print(">> ");
+                        choice = scanner.next().toLowerCase();
+                        if(choice.equals("y") || choice.equals("yes")){
+                            showRequests();
+                        }
+                        break;
+                    }
+
+                    Thread.sleep(100);
+                }
+
+                // if there is input, read it
+                if(System.in.available() > 0){
+                    choice = scanner.next();
+                } else {
+                    continue;
+                }
                 switch (choice) {
-                    case 1 -> sendNewRequest();
-                    case 2 -> showRequests();
-                    case 3 -> openFinishedRequest();
+                    case "1" -> sendNewRequest();
+                    case "2" -> showRequests();
+                    case "3" -> openFinishedRequest();
+                    case "4" -> {
+                        boolean allDone = clientRequestsStatusMap.values().stream()
+                                .allMatch(s -> s == Status.DONE);
+                        if (! allDone) {
+                            System.out.println("There are still requests in progress, are you sure you want to exit? (y/n)");
+                            String c = scanner.next().toLowerCase();
+                            if (c.equals("y") || c.equals("yes")) {
+                                System.out.println("Exiting");
+                                System.exit(0);
+                            }
+                        }
+                    }
+                    default -> System.out.println("\nInvalid choice\n");
                 }
             }
             catch(Exception e) {
@@ -226,6 +276,8 @@ public class ClientMainClass {
             }
         }
     }
+
+
 
     private static void checkForFinishedRequests(){
         ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
@@ -250,6 +302,7 @@ public class ClientMainClass {
                 String output = downloadFromS3(completedRequest.output());
                 createHtmlFile(output,clientRequestMap.get(completedRequest.requestId()).fileName());
                 deleteFromQueue(m,USER_OUTPUT_QUEUE_NAME);
+                newFinishedRequest.set(true);
             }
         }
     }
@@ -271,7 +324,7 @@ public class ClientMainClass {
                 .map(tr -> JsonUtils.<TitleReviews>deserialize(tr, TitleReviews.class))
                 .toList();
 
-        String[] baseRowParts = BASE_ROW.split("%s");
+        String[] baseRowParts = BASE_HTML_ROW.split("%s");
 
         List<String> rows = new LinkedList<>();
         for(TitleReviews tr: titleReviews){
@@ -355,7 +408,18 @@ public class ClientMainClass {
 
     private static void openFinishedRequest() {
         System.out.println("Enter request id:");
-        int requestId = scanner.nextInt();
+        System.out.print(">> ");
+        String requestIdStr = scanner.next();
+        int requestId;
+
+        // get a valid request id
+        try{
+            requestId = Integer.parseInt(requestIdStr);
+        } catch (NumberFormatException e){
+            System.out.println("\nInvalid request id\n");
+            return;
+        }
+
         if(clientRequestsStatusMap.get(requestId) == Status.DONE){
             String path = getFolderPath() + "/output files/" + clientRequestMap.get(requestId).fileName().substring(0, clientRequestMap.get(requestId).fileName().lastIndexOf(".")) + ".html";
             try {
@@ -380,15 +444,35 @@ public class ClientMainClass {
         System.out.print("File name: ");
         String fileName = scanner.next();
         System.out.print("Reviews per worker: ");
-        int reviewsPerWorker = scanner.nextInt();
+        String reviewsPerWorkerStr = scanner.next();
+        int reviewsPerWorker;
+        try{
+            reviewsPerWorker = Integer.parseInt(reviewsPerWorkerStr);
+        } catch (NumberFormatException e){
+            System.out.println("\nInvalid number of reviews\n");
+            return;
+        }
         System.out.print("Terminate(t/f): ");
-        String terminate = scanner.next();
-        Boolean terminateB = terminate.equals("t") ? true : terminate.equals("f") ? false : null;
+        String terminateStr = scanner.next();
+        Boolean terminate = terminateStr.equals("t") ? Boolean.TRUE : terminateStr.equals("f") ? Boolean.FALSE : null;
+        if(terminate == null){
+            System.out.println("\nInvalid terminate value\n");
+            return;
+        }
+        try {
+            sendClientRequest(fileName,reviewsPerWorker,terminate);
+        } catch (IOException e) {
+            if(e instanceof FileNotFoundException) {
+                System.out.println("\nFile not found\n");
+            } else {
+                log("Failed to send request, "+ e);
+            }
+            return;
+        }
         startManagerIfNotExists();
-        sendClientRequest(fileName,reviewsPerWorker,terminateB);
     }
 
-    private static void sendClientRequest(String fileName, int reviewsPerWorker, boolean terminate) {
+    private static void sendClientRequest(String fileName, int reviewsPerWorker, boolean terminate) throws IOException {
         String input = readInputFile(fileName);
         String pathInS3 = "temp/%s/%s___%s".formatted(clientId, UUID.randomUUID(), fileName);
         uploadToS3(pathInS3, input);
@@ -486,7 +570,7 @@ public class ClientMainClass {
         return new String(file);
     }
 
-    public static String readInputFile(String fileName){
+    public static String readInputFile(String fileName) throws IOException {
         String path = getFolderPath()+"/input files/"+fileName;
         StringBuilder stringBuilder = new StringBuilder();
         String line;
@@ -494,12 +578,6 @@ public class ClientMainClass {
             while((line = buffReader.readLine())!=null) {
                 stringBuilder.append(line).append("\n");
             }
-        }
-        catch (FileNotFoundException e){
-            System.out.println("File not found");
-        }
-        catch(IOException e){
-            e.printStackTrace();
         }
         return stringBuilder.toString();
     }
@@ -545,18 +623,7 @@ public class ClientMainClass {
             }
             if (uploadLogOptions.contains(arg)) {
                 uploadLogs = true;
-                errorMessage = "Missing upload log name\n";
-                try{
-                    if(argsList.contains(args[i+1])){
-                        printUsageAndExit(errorMessage);
-                    }
-                    uploadLogName = args[i+1];
-                    i++;
-                    continue;
-                } catch (IndexOutOfBoundsException e){
-                    System.out.println();
-                    printUsageAndExit(errorMessage);
-                }
+                continue;
             }
             if (uploadIntervalOptions.contains(arg)) {
                 errorMessage = "Missing upload interval\n";
