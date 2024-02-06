@@ -83,21 +83,45 @@ public class ClientMainClass {
     private static SqsClient sqs;
     // </SQS>
 
+    // <DEBUG FLAGS>
+    private static final String USAGE = """
+                Usage: java -jar clientProgram.jar [-h | -help] [optional debug flags]
+                                    
+                -h | -help :- Print this message and exit.
+                                    
+                optional debug flags:
+                
+                    -d | -debug :- Run in debug mode, logging all operations to standard output
+                    
+                    -ul | -uploadLog <file name> :- logs will be uploaded to <file name> in the S3 bucket.
+                                  Must be used with -debug.
+                                  
+                    -ui | -uploadInterval <interval in seconds> :- When combined with -uploadLog, specifies the interval in seconds
+                                  between log uploads to the S3 bucket.
+                                  Must be a positive integer, must be used with -uploadLog.
+                                  If this argument is not specified, defaults to 60 seconds.
+                                  
+                    -noEc2 :- Run without creating EC2 instances. Useful for debugging locally.
+                    
+                    -noManager :- Run without creating manager instance. Useful for debugging locally.
+                """;
+    private static volatile boolean debugMode;
+    private static volatile boolean noEc2;
+    private static volatile boolean uploadLogs;
+    private static volatile int appendLogIntervalInSeconds;
+    private static String logName;
+    private static boolean noManager;
+    // </DEBUG FLAGS>
+
     private static final Region ec2_region = Region.US_EAST_1;
     private static final Region s3_region = Region.US_WEST_2;
 
     private static String clientId;
     private static int requestId;
-    private static boolean debugMode;
-    private static boolean uploadLogs;
-
-    private static int appendLogIntervalInSeconds;
     private static Scanner scanner;
 
     private static Map<Integer,ClientRequest> clientRequestMap;
     private static Map<Integer,Status> clientRequestsStatusMap;
-    private static boolean noEc2;
-    private static boolean noManager;
 
     enum Status {
         DONE,
@@ -274,7 +298,7 @@ public class ClientMainClass {
         try(BufferedWriter writer = new BufferedWriter(new FileWriter(pathToWrite))){
                 writer.write(docBuilder.toString());
             } catch (IOException e) {
-                e.printStackTrace();
+                log("Failed to write html file, "+ e);
             }
     }
 
@@ -300,8 +324,7 @@ public class ClientMainClass {
         int green = color.getGreen();
         int blue = color.getBlue();
 
-        String hex = String.format("#%02X%02X%02X", red, green, blue);
-        return hex;
+        return String.format("#%02X%02X%02X", red, green, blue);
     }
 
 
@@ -314,9 +337,7 @@ public class ClientMainClass {
     private static void log(String message){
         if(debugMode){
             String timeStamp = getTimeStamp(LocalDateTime.now());
-//            if(uploadLogs){
-//                uploadBuffer.append(timeStamp).append(" ").append(message).append("\n");
-//            }
+            // TODO: add log to file
             System.out.printf("%s %s%n",timeStamp,message);
         }
     }
@@ -489,5 +510,90 @@ public class ClientMainClass {
         folderPath = folderPath.substring(0,folderPath.lastIndexOf("/")); // remove .class file from path
         folderPath = folderPath.substring(0,folderPath.lastIndexOf("/")); // exit jar
         return folderPath;
+    }
+
+    private static void printUsageAndExit(String errorMessage) {
+        if(! errorMessage.equals("")) {
+            System.out.println(errorMessage);
+        }
+        System.out.println(USAGE);
+        System.exit(1);
+    }
+
+    private static void readArgs(String[] args) {
+
+        List<String> helpOptions = List.of("-h","-help");
+        List<String> debugModeOptions = List.of("-d","-debug");
+        List<String> uploadLogOptions = List.of("-ul","-uploadlog");
+        List<String> uploadIntervalOptions = List.of("-ui","-uploadinterval");
+        List<String> argsList = new LinkedList<>();
+        argsList.addAll(helpOptions);
+        argsList.addAll(debugModeOptions);
+        argsList.addAll(uploadLogOptions);
+        argsList.addAll(uploadIntervalOptions);
+        argsList.add("-noec2");
+        argsList.add("-nomanager");
+
+        for (int i = 0; i < args.length; i++) {
+            String arg = args[i].toLowerCase();
+            String errorMessage;
+
+            if (debugModeOptions.contains(arg)) {
+                debugMode = true;
+                continue;
+            }
+            if (uploadLogOptions.contains(arg)) {
+                uploadLogs = true;
+                errorMessage = "Missing upload log name\n";
+                try{
+                    if(argsList.contains(args[i+1])){
+                        printUsageAndExit(errorMessage);
+                    }
+                    uploadLogName = args[i+1];
+                    i++;
+                    continue;
+                } catch (IndexOutOfBoundsException e){
+                    System.out.println();
+                    printUsageAndExit(errorMessage);
+                }
+            }
+            if (uploadIntervalOptions.contains(arg)) {
+                errorMessage = "Missing upload interval\n";
+                try{
+                    if(argsList.contains(args[i+1])){
+                        printUsageAndExit(errorMessage);
+                    }
+                    appendLogIntervalInSeconds = Integer.parseInt(args[i+1]);
+                    i++;
+                    continue;
+                } catch (IndexOutOfBoundsException e){
+                    printUsageAndExit(errorMessage);
+                } catch (NumberFormatException e){
+                    printUsageAndExit("Invalid upload interval\n");
+                }
+            }
+            if(arg.equals("-noec2")){
+                noEc2 = true;
+                continue;
+            }
+            if(arg.equals("-nomanager")){
+                noManager = true;
+                continue;
+            }
+            if (arg.equals("-h") || arg.equals("-help")) {
+                printUsageAndExit("");
+            }
+
+            System.out.println();
+            printUsageAndExit("Unknown argument: %s\n".formatted(arg));
+        }
+
+        if(uploadLogs && ! debugMode){
+            printUsageAndExit("Upload logs flag was provided but not debug mode flag\n");
+        }
+
+        if(uploadLogs && appendLogIntervalInSeconds == 0){
+            appendLogIntervalInSeconds = 60;
+        }
     }
 }
