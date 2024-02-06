@@ -87,7 +87,7 @@ public class ClientMainClass {
             <tr >
                 <td style="background-color: %s; width: 50px; height: 100px"></td>
                 <td>
-                    <ul style="line-height: 25px; padding-top: 0px; padding-bottom: 0px">
+                    <ul style="line-height: 25px; padding-top: 0; padding-bottom: 0">
                         <li style="padding-bottom: 5px; padding-top: 5px">Subject: %s</li>
                         <li style="padding-bottom: 5px; padding-top: 5px"><a href="%s">%s</a></li>
                         <li style="padding-bottom: 5px; padding-top: 5px">Entities: %s</li>
@@ -206,6 +206,7 @@ public class ClientMainClass {
     private static void mainLoop(Box<Exception> exceptionHandler) {
         while (exceptionHandler.get() == null) {
             try {
+                System.out.println();
                 System.out.println("Choose an option:");
                 System.out.println("1. Send new request");
                 System.out.println("2. Show requests");
@@ -246,15 +247,16 @@ public class ClientMainClass {
                         boolean allDone = clientRequestsStatusMap.values().stream()
                                 .allMatch(s -> s == Status.DONE);
                         if (! allDone) {
-                            System.out.println("There are still requests in progress, are you sure you want to exit? (y/n)");
+                            System.out.println("\nThere are still requests in progress, are you sure you want to exit? (y/n)");
                             String c = readLine().toLowerCase();
-                            if (c.equals("y") || c.equals("yes")) {
-                                System.out.println("Exiting");
-                                System.exit(0);
+                            if (! (c.equals("y") || c.equals("yes"))) {
+                                continue;
                             }
                         }
+                        System.out.println("\nExiting");
+                        System.exit(0);
                     }
-                    default -> System.out.println("\nInvalid choice\n");
+                    default -> System.out.println("\nInvalid choice");
                 }
             }
             catch(Exception e) {
@@ -426,7 +428,7 @@ public class ClientMainClass {
         try{
             requestId = Integer.parseInt(requestIdStr);
         } catch (NumberFormatException e){
-            System.out.println("\nInvalid request id\n");
+            System.out.println("\nInvalid request id");
             return;
         }
 
@@ -434,6 +436,8 @@ public class ClientMainClass {
             String path = getFolderPath() + "/output files/" + clientRequestMap.get(requestId).fileName().substring(0, clientRequestMap.get(requestId).fileName().lastIndexOf(".")) + ".html";
             try {
                 Desktop.getDesktop().open(new File(path));
+                System.out.println("\nFile opened successfully.");
+                waitForEnter();
             } catch (IOException e) {
                 e.printStackTrace();
             }
@@ -452,7 +456,7 @@ public class ClientMainClass {
     }
 
     private static void waitForEnter() {
-        System.out.println("Press enter to continue");
+        System.out.print("Press enter to continue");
         try {
             System.in.read();
             while(System.in.available() > 0){
@@ -470,21 +474,21 @@ public class ClientMainClass {
         try{
             reviewsPerWorker = Integer.parseInt(reviewsPerWorkerStr);
         } catch (NumberFormatException e){
-            System.out.println("\nInvalid number of reviews\n");
+            System.out.println("\nInvalid number of reviews");
             return;
         }
         System.out.print("Terminate(t/f): ");
         String terminateStr = readLine();
         Boolean terminate = terminateStr.equals("t") ? Boolean.TRUE : terminateStr.equals("f") ? Boolean.FALSE : null;
         if(terminate == null){
-            System.out.println("\nInvalid terminate value\n");
+            System.out.println("\nInvalid terminate value");
             return;
         }
         try {
             sendClientRequest(fileName,reviewsPerWorker,terminate);
         } catch (IOException e) {
             if(e instanceof FileNotFoundException) {
-                System.out.println("\nFile not found\n");
+                System.out.println("\nFile not found");
             } else {
                 log("Failed to send request, "+ e);
             }

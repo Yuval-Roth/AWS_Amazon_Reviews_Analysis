@@ -65,7 +65,7 @@ public class TablePrinter {
             sb.append("\n"); // end of row
         }
 
-        sb.append("-".repeat(totalWidth)).append("\n"); // bottom border
+        sb.append("-".repeat(totalWidth)); // bottom border
 
         return sb.toString();
     }
