@@ -85,13 +85,13 @@ public class ClientMainClass {
 
     // <DEBUG FLAGS>
     private static final String USAGE = """
-                Usage: java -jar clientProgram.jar [-h | -help] [optional debug flags]
+                Usage: java -jar clientProgram.jar [-h | -help] [-d] [optional debug flags]
                                     
                 -h | -help :- Print this message and exit.
                                     
-                optional debug flags:
+                -d | -debug :- Run in debug mode, logging all operations to standard output
                 
-                    -d | -debug :- Run in debug mode, logging all operations to standard output
+                optional debug flags:
                     
                     -ul | -uploadLog <file name> :- logs will be uploaded to <file name> in the S3 bucket.
                                   Must be used with -debug.
@@ -101,9 +101,10 @@ public class ClientMainClass {
                                   Must be a positive integer, must be used with -uploadLog.
                                   If this argument is not specified, defaults to 60 seconds.
                                   
-                    -noEc2 :- Run without creating EC2 instances. Useful for debugging locally.
+                    -noEc2 :- Run without creating worker instances. Useful for debugging locally.
                     
                     -noManager :- Run without creating manager instance. Useful for debugging locally.
+                                  All other debug flags are ignored when this flag is used.
                 """;
     private static volatile boolean debugMode;
     private static volatile boolean noEc2;
