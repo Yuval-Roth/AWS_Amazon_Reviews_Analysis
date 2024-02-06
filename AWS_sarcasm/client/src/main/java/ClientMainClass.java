@@ -83,7 +83,6 @@ public class ClientMainClass {
     // <APPLICATION DATA>
     private static String clientId;
     private static int requestId;
-    private static Scanner scanner;
     private static final String BASE_HTML_ROW = """
             <tr >
                 <td style="background-color: %s; width: 50px; height: 100px"></td>
@@ -178,7 +177,6 @@ public class ClientMainClass {
         clientId = UUID.randomUUID().toString();
         clientRequestMap = new HashMap<>();
         clientRequestsStatusMap = new HashMap<>();
-        scanner = new Scanner(System.in);
 
         Box<Exception> exceptionHandler = new Box<>(null);
 
@@ -224,7 +222,7 @@ public class ClientMainClass {
                         newFinishedRequest.set(false);
                         System.out.println("\r  \nThere are new finished requests, would you like to see them? (y/n)");
                         System.out.print(">> ");
-                        choice = scanner.next().toLowerCase();
+                        choice = readLine().toLowerCase();
                         if(choice.equals("y") || choice.equals("yes")){
                             showRequests();
                         }
@@ -236,7 +234,7 @@ public class ClientMainClass {
 
                 // if there is input, read it
                 if(System.in.available() > 0){
-                    choice = scanner.next();
+                    choice = readLine();
                 } else {
                     continue;
                 }
@@ -249,7 +247,7 @@ public class ClientMainClass {
                                 .allMatch(s -> s == Status.DONE);
                         if (! allDone) {
                             System.out.println("There are still requests in progress, are you sure you want to exit? (y/n)");
-                            String c = scanner.next().toLowerCase();
+                            String c = readLine().toLowerCase();
                             if (c.equals("y") || c.equals("yes")) {
                                 System.out.println("Exiting");
                                 System.exit(0);
@@ -264,6 +262,18 @@ public class ClientMainClass {
                 return;
             }
         }
+    }
+
+    private static String readLine() {
+        StringBuilder input = new StringBuilder();
+        try {
+            input.append((char) System.in.read());
+            while(System.in.available() > 0){
+                input.append((char) System.in.read());
+            }
+            input.deleteCharAt(input.length()-1);
+        } catch (IOException ignored) {}
+        return input.toString();
     }
 
     private static void secondaryLoop(Box<Exception> exceptionHandler) {
@@ -409,7 +419,7 @@ public class ClientMainClass {
     private static void openFinishedRequest() {
         System.out.println("Enter request id:");
         System.out.print(">> ");
-        String requestIdStr = scanner.next();
+        String requestIdStr = readLine();
         int requestId;
 
         // get a valid request id
@@ -438,13 +448,24 @@ public class ClientMainClass {
                     clientRequestsStatusMap.get(entry.getKey()).toString());
         }
         System.out.println(table);
+        waitForEnter();
+    }
+
+    private static void waitForEnter() {
+        System.out.println("Press enter to continue");
+        try {
+            System.in.read();
+            while(System.in.available() > 0){
+                System.in.read();
+            }
+        } catch (IOException ignored) {}
     }
 
     private static void sendNewRequest() {
         System.out.print("File name: ");
-        String fileName = scanner.next();
+        String fileName = readLine();
         System.out.print("Reviews per worker: ");
-        String reviewsPerWorkerStr = scanner.next();
+        String reviewsPerWorkerStr = readLine();
         int reviewsPerWorker;
         try{
             reviewsPerWorker = Integer.parseInt(reviewsPerWorkerStr);
@@ -453,7 +474,7 @@ public class ClientMainClass {
             return;
         }
         System.out.print("Terminate(t/f): ");
-        String terminateStr = scanner.next();
+        String terminateStr = readLine();
         Boolean terminate = terminateStr.equals("t") ? Boolean.TRUE : terminateStr.equals("f") ? Boolean.FALSE : null;
         if(terminate == null){
             System.out.println("\nInvalid terminate value\n");
@@ -470,6 +491,8 @@ public class ClientMainClass {
             return;
         }
         startManagerIfNotExists();
+        System.out.println("\nRequest sent successfully.");
+        waitForEnter();
     }
 
     private static void sendClientRequest(String fileName, int reviewsPerWorker, boolean terminate) throws IOException {
