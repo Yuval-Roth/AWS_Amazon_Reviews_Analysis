@@ -17,4 +17,5 @@ buildNumber.properties
 .classpath
 
 **/.idea/*
+**/credentials.txt
 

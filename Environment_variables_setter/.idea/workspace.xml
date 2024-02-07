@@ -10,7 +10,6 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="3819239d-a9fd-4072-a8d9-1a6831a5bca8" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/../AWS_sarcasm/client/.idea/compiler.xml" beforeDir="false" afterPath="$PROJECT_DIR$/../AWS_sarcasm/client/.idea/compiler.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/../AWS_sarcasm/client/src/main/java/ClientMainClass.java" beforeDir="false" afterPath="$PROJECT_DIR$/../AWS_sarcasm/client/src/main/java/ClientMainClass.java" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -45,7 +44,7 @@
     "git-widget-placeholder": "main",
     "ignore.virus.scanning.warn.message": "true",
     "kotlin-language-version-configured": "true",
-    "last_opened_file_path": "C:/Users/yuval/git/Distributed_Systems_Assignment1/AWS_sarcasm/client",
+    "last_opened_file_path": "C:/Users/Yuval/git/Distributed_Systems_Assignment1/Environment_variables_setter",
     "node.js.detected.package.eslint": "true",
     "node.js.detected.package.tslint": "true",
     "node.js.selected.package.eslint": "(autodetect)",
@@ -85,7 +84,7 @@
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
-        <option value="jdk-21.0.1-openjdk-21.0.1-4caba194b151-23eed401" />
+        <option value="jdk-21.0.2-openjdk-21.0.2-4caba194b151-4f524021" />
       </set>
     </attachedChunks>
   </component>
@@ -100,6 +99,7 @@
       <workItem from="1706091799287" duration="3450000" />
       <workItem from="1706095326773" duration="270000" />
       <workItem from="1706994921784" duration="2732000" />
+      <workItem from="1707340451398" duration="643000" />
     </task>
     <servers />
   </component>

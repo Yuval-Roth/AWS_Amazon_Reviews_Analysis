@@ -1,4 +1,4 @@
-import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.AwsSessionCredentials;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.ec2.Ec2Client;
@@ -12,8 +12,8 @@ import software.amazon.awssdk.services.sqs.model.*;
 import java.awt.*;
 import java.io.*;
 import java.time.LocalDateTime;
-import java.util.*;
 import java.util.List;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class ClientMainClass {
@@ -140,32 +140,66 @@ public class ClientMainClass {
 
     public static void main(String[] args) {
 
+
+        Box<AwsSessionCredentials> awsCreds = new Box<>(null);
+
+        try {
+            AwsCredentialsReader credReader = new AwsCredentialsReader();
+            awsCreds.set(credReader.getCredentials());
+        } catch (FileNotFoundException e) {
+            System.out.println("Credentials file not found.");
+            System.out.println("Make sure the credentials file is in the same directory as the jar file,");
+            System.out.println("is named 'credentials.txt' and contains the following:");
+            System.out.println("aws_access_key_id = <your access key>");
+            System.out.println("aws_secret_access_key = <your secret key>");
+            System.out.println("aws_session_token = <your session token>");
+            System.out.println("\nExiting...");
+            System.exit(1);
+        }
+
+
         readArgs(args);
 
         sqs = SqsClient.builder()
                 .region(ec2_region)
+                .credentialsProvider(awsCreds::get)
                 .build();
 
         s3 = S3Client.builder()
                 .region(s3_region)
+                .credentialsProvider(awsCreds::get)
                 .build();
 
         ec2 = Ec2Client.builder()
                 .region(ec2_region)
+                .credentialsProvider(awsCreds::get)
                 .build();
 
+
         if(! noManager){
-            var r =  ec2.describeImages(DescribeImagesRequest.builder()
-                    .filters(Filter.builder()
-                            .name("name")
-                            .values("managerImage")
-                            .build())
-                    .build());
             try{
+                var r =  ec2.describeImages(DescribeImagesRequest.builder()
+                        .filters(Filter.builder()
+                                .name("name")
+                                .values("managerImage")
+                                .build())
+                        .build());
                 MANAGER_IMAGE_ID = r.images().getFirst().imageId();
             } catch(NoSuchElementException e){
                 log("No manager image found");
                 handleException(new TerminateException());
+            } catch (Ec2Exception e){
+                String m = e.getMessage();
+                if(m.toLowerCase().contains("not authorized")){
+                    System.out.println("Aws credentials were rejected.");
+                    System.out.println("Make sure the credentials are up to date");
+                    System.out.println("\nExiting...");
+                } else {
+                    System.out.println("Failed to get manager image id for an unknown reason.");
+                    System.out.println("Exiting...");
+                    log("Failed to get manager image id for an unknown reason.\n%s".formatted(stackTraceToString(e)));
+                }
+                System.exit(1);
             }
         }
 
@@ -174,8 +208,8 @@ public class ClientMainClass {
         clientRequestMap = new HashMap<>();
         clientRequestsStatusMap = new HashMap<>();
         newFinishedRequest = new AtomicBoolean(false);
-        log = new File(getFolderPath() + "/client_log.text");
-        
+        log = new File(getFolderPath() + "client_log.text");
+
         Box<Exception> exceptionHandler = new Box<>(null);
 
         while(true) {
