@@ -136,38 +136,39 @@ public class ClientMainClass {
     private static Map<Integer,Status> clientRequestsStatusMap;
     private static AtomicBoolean newFinishedRequest;
     private static File log;
+    private static InterruptableLineReader lineReader;
     // </APPLICATION DATA>
 
     public static void main(String[] args) {
 
         readArgs(args);
 
-        sqs = SqsClient.builder()
-                .region(ec2_region)
-                .build();
-
-        s3 = S3Client.builder()
-                .region(s3_region)
-                .build();
-
-        ec2 = Ec2Client.builder()
-                .region(ec2_region)
-                .build();
-
-        if(! noManager){
-            var r =  ec2.describeImages(DescribeImagesRequest.builder()
-                    .filters(Filter.builder()
-                            .name("name")
-                            .values("managerImage")
-                            .build())
-                    .build());
-            try{
-                MANAGER_IMAGE_ID = r.images().getFirst().imageId();
-            } catch(NoSuchElementException e){
-                log("No manager image found");
-                handleException(new TerminateException());
-            }
-        }
+//        sqs = SqsClient.builder()
+//                .region(ec2_region)
+//                .build();
+//
+//        s3 = S3Client.builder()
+//                .region(s3_region)
+//                .build();
+//
+//        ec2 = Ec2Client.builder()
+//                .region(ec2_region)
+//                .build();
+//
+//        if(! noManager){
+//            var r =  ec2.describeImages(DescribeImagesRequest.builder()
+//                    .filters(Filter.builder()
+//                            .name("name")
+//                            .values("managerImage")
+//                            .build())
+//                    .build());
+//            try{
+//                MANAGER_IMAGE_ID = r.images().getFirst().imageId();
+//            } catch(NoSuchElementException e){
+//                log("No manager image found");
+//                handleException(new TerminateException());
+//            }
+//        }
 
         requestId = 0;
         clientId = UUID.randomUUID().toString();
@@ -175,6 +176,7 @@ public class ClientMainClass {
         clientRequestsStatusMap = new HashMap<>();
         newFinishedRequest = new AtomicBoolean(false);
         log = new File(getFolderPath() + "/client_log.text");
+        lineReader = new InterruptableLineReader();
 
 
         Box<Exception> exceptionHandler = new Box<>(null);
@@ -206,11 +208,12 @@ public class ClientMainClass {
                 System.out.println("3. Open finished request");
                 System.out.println("4. Exit");
                 System.out.print(">> ");
-                String choice;
+                String choice = "-1";
 
                 // wait for input or new finished request
-                while(System.in.available() == 0){
-
+                try{
+                    choice = lineReader.readLine();
+                } catch(InterruptableLineReader.ReadInterruptionException ignored){
                     // if there are new finished requests, ask the user if they want to see them
                     if(newFinishedRequest.get()){
                         newFinishedRequest.set(false);
@@ -220,17 +223,16 @@ public class ClientMainClass {
                         if(choice.equals("y") || choice.equals("yes")){
                             showRequests();
                         }
-                        break;
                     }
-                    Thread.sleep(100);
-                }
-
-                // if there is input, read it
-                if(System.in.available() > 0){
-                    choice = readLine();
-                } else {
                     continue;
                 }
+
+//                // if there is input, read it
+//                if(System.in.available() > 0){
+//                    choice = readLine();
+//                } else {
+//                    continue;
+//                }
                 switch (choice) {
                     case "1" -> sendNewRequest();
                     case "2" -> showRequests();
@@ -264,8 +266,12 @@ public class ClientMainClass {
     private static void secondaryLoop(Box<Exception> exceptionHandler) {
         while(exceptionHandler.get() == null){
             try{
-                checkForFinishedRequests();
-                Thread.sleep(1000);
+                Thread.sleep(5000);
+                newFinishedRequest.set(true);
+                lineReader.interrupt();
+
+//                checkForFinishedRequests();
+                Thread.sleep(100000);
             } catch (Exception e){
                 exceptionHandler.set(e);
                 return;
