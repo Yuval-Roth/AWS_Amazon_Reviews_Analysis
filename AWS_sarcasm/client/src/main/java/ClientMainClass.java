@@ -1,3 +1,4 @@
+import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.ec2.Ec2Client;
@@ -153,7 +154,6 @@ public class ClientMainClass {
                 .region(ec2_region)
                 .build();
 
-
         if(! noManager){
             var r =  ec2.describeImages(DescribeImagesRequest.builder()
                     .filters(Filter.builder()
@@ -248,7 +248,10 @@ public class ClientMainClass {
                         System.out.println("\nExiting");
                         throw new TerminateException();
                     }
-                    default -> System.out.println("\nInvalid choice");
+                    default -> {
+                        log("choice: '%s'.".formatted(choice));
+                        System.out.println("\nInvalid choice");
+                    }
                 }
             }
             catch(Exception e) {
@@ -651,13 +654,16 @@ public class ClientMainClass {
 
     private static String readLine() {
         StringBuilder input = new StringBuilder();
+        int c;
         try {
-            input.append((char) System.in.read());
-            while(System.in.available() > 0){
-                input.append((char) System.in.read());
+            while((c = System.in.read()) != -1 && c != '\n' && c != '\r'){
+                input.append((char) c);
             }
-            input.deleteCharAt(input.length()-1);
+            while(System.in.available() > 0){
+                System.in.read();
+            }
         } catch (IOException ignored) {}
+        log("User input: "+input.toString().replace("\n","'newline'"));
         return input.toString();
     }
 
