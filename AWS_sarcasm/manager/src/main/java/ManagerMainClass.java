@@ -112,6 +112,8 @@ public class ManagerMainClass {
                 .region(ec2_region)
                 .build();
 
+
+
         if(! noEc2){
             var r =  ec2.describeImages(DescribeImagesRequest.builder()
                     .filters(Filter.builder()

@@ -32,23 +32,23 @@ public class ClientMainClass {
     public static final String BUCKET_NAME = "distributed-systems-2024-bucket-yuval-adi";
     private static final Region s3_region = Region.US_WEST_2;
     private static S3Client s3;
-
     // </S3>
+
     // <EC2>
     public static String MANAGER_IMAGE_ID;
     public static final String SECURITY_GROUP = "sg-00c67312e0a74a525";
     public static final String MANAGER_INSTANCE_TYPE = "t3.micro";
     private static Ec2Client ec2;
     private static final Region ec2_region = Region.US_EAST_1;
-
     // </EC2>
+
     // <SQS>
     private static final String USER_INPUT_QUEUE_NAME = "userInputQueue";
     private static final String USER_OUTPUT_QUEUE_NAME = "userOutputQueue";
     private static final String SQS_DOMAIN_PREFIX = "https://sqs.us-east-1.amazonaws.com/057325794177/";
     private static SqsClient sqs;
-
     // </SQS>
+
     // <DEBUG FLAGS>
     private static final String USAGE = """
                 Usage: java -jar clientProgram.jar [-h | -help] [-d] [optional debug flags]
@@ -77,7 +77,6 @@ public class ClientMainClass {
     private static volatile boolean uploadLogs;
     private static volatile int appendLogIntervalInSeconds;
     private static boolean noManager;
-
     // </DEBUG FLAGS>
 
     // <APPLICATION DATA>
@@ -134,10 +133,8 @@ public class ClientMainClass {
             </html>""";
     private static Map<Integer,ClientRequest> clientRequestMap;
     private static Map<Integer,Status> clientRequestsStatusMap;
-    private static AtomicBoolean newFinishedRequest = new AtomicBoolean(false);
-
-
-
+    private static AtomicBoolean newFinishedRequest;
+    private static File log;
     // </APPLICATION DATA>
 
     public static void main(String[] args) {
@@ -172,11 +169,13 @@ public class ClientMainClass {
             }
         }
 
-
         requestId = 0;
         clientId = UUID.randomUUID().toString();
         clientRequestMap = new HashMap<>();
         clientRequestsStatusMap = new HashMap<>();
+        newFinishedRequest = new AtomicBoolean(false);
+        log = new File(getFolderPath() + "/client_log.text");
+
 
         Box<Exception> exceptionHandler = new Box<>(null);
 
@@ -194,14 +193,8 @@ public class ClientMainClass {
                 exceptionHandler.set(null);
             }
         }
-
-//        String output = readInputFile("output1.txt");
-//        createHtmlFile(output,"output1.txt");
     }
 
-    private static void handleException(Exception exception) {
-        exception.printStackTrace();
-    }
 
     private static void mainLoop(Box<Exception> exceptionHandler) {
         while (exceptionHandler.get() == null) {
@@ -229,7 +222,6 @@ public class ClientMainClass {
                         }
                         break;
                     }
-
                     Thread.sleep(100);
                 }
 
@@ -254,7 +246,7 @@ public class ClientMainClass {
                             }
                         }
                         System.out.println("\nExiting");
-                        System.exit(0);
+                        throw new TerminateException();
                     }
                     default -> System.out.println("\nInvalid choice");
                 }
@@ -266,22 +258,11 @@ public class ClientMainClass {
         }
     }
 
-    private static String readLine() {
-        StringBuilder input = new StringBuilder();
-        try {
-            input.append((char) System.in.read());
-            while(System.in.available() > 0){
-                input.append((char) System.in.read());
-            }
-            input.deleteCharAt(input.length()-1);
-        } catch (IOException ignored) {}
-        return input.toString();
-    }
-
     private static void secondaryLoop(Box<Exception> exceptionHandler) {
         while(exceptionHandler.get() == null){
             try{
                 checkForFinishedRequests();
+                Thread.sleep(1000);
             } catch (Exception e){
                 exceptionHandler.set(e);
                 return;
@@ -290,180 +271,9 @@ public class ClientMainClass {
     }
 
 
-
-    private static void checkForFinishedRequests(){
-        ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
-                .queueUrl(getQueueURL(USER_OUTPUT_QUEUE_NAME))
-                .waitTimeSeconds(1)
-                .build();
-
-        ReceiveMessageResponse r;
-        do{
-            r = sqs.receiveMessage(messageRequest);
-            if(r.hasMessages()){
-                handleFinishedRequests(r.messages());
-            }
-        } while(r.hasMessages());
-    }
-
-    private static void handleFinishedRequests(List<Message> messages) {
-        for(Message m: messages){
-            CompletedClientRequest completedRequest = JsonUtils.deserialize(m.body(),CompletedClientRequest.class);
-            if(completedRequest.clientId().equals(clientId)){
-                clientRequestsStatusMap.put(completedRequest.requestId(),Status.DONE);
-                String output = downloadFromS3(completedRequest.output());
-                createHtmlFile(output,clientRequestMap.get(completedRequest.requestId()).fileName());
-                deleteFromQueue(m,USER_OUTPUT_QUEUE_NAME);
-                newFinishedRequest.set(true);
-            }
-        }
-    }
-
-    private static void deleteFromQueue(Message message, String queueName) {
-        sqs.deleteMessage(DeleteMessageRequest.builder()
-                .queueUrl(getQueueURL(queueName))
-                .receiptHandle(message.receiptHandle())
-                .build());
-    }
-
-
-
-    private static void createHtmlFile(String output, String fileName) {
-
-        String[] jsons = output.split("\n");
-
-        List<TitleReviews> titleReviews = Arrays.stream(jsons)
-                .map(tr -> JsonUtils.<TitleReviews>deserialize(tr, TitleReviews.class))
-                .toList();
-
-        String[] baseRowParts = BASE_HTML_ROW.split("%s");
-
-        List<String> rows = new LinkedList<>();
-        for(TitleReviews tr: titleReviews){
-            for(Review r: tr.reviews()){
-                rows.add(baseRowParts[0] + getBackgroundColor(r.sentiment()) + baseRowParts[1] +
-                        tr.title() + baseRowParts[2] +
-                        r.link() + baseRowParts[3] +
-                        r.link() + baseRowParts[4] +
-                        r.entitiesToString() + baseRowParts[5] +
-                        isSarcasm(r.sentiment(),r.rating()) + baseRowParts[6]);
-            }
-        }
-
-        String[] baseHtmlDocParts = BASE_HTML_DOC.split("%s");
-        StringBuilder docBuilder = new StringBuilder();
-        docBuilder.append(baseHtmlDocParts[0]).append(fileName).append(baseHtmlDocParts[1]).append(fileName).append(baseHtmlDocParts[2]);
-        for(String row: rows){
-            docBuilder.append(row).append("\n");
-        }
-        docBuilder.append(baseHtmlDocParts[3]);
-
-        String pathToWrite = getFolderPath() + "/output files/" + fileName.substring(0, fileName.lastIndexOf(".")) + ".html";
-        File file = new File(pathToWrite);
-        file.getParentFile().mkdirs();
-        try(BufferedWriter writer = new BufferedWriter(new FileWriter(pathToWrite))){
-                writer.write(docBuilder.toString());
-            } catch (IOException e) {
-                log("Failed to write html file, "+ e);
-            }
-    }
-
-    private static String getBackgroundColor(Review.Sentiment sentiment) {
-
-        Color veryNegative = new Color(110, 1, 1);
-        Color negative = new Color(255, 51, 51, 255);
-        Color neutral = new Color(0, 0, 0);
-        Color positive = new Color(68, 232, 66);
-        Color veryPositive = new Color(2, 77, 0);
-
-        return switch(sentiment){
-            case VeryNegative -> colorToHex(veryNegative);
-            case Negative -> colorToHex(negative);
-            case Neutral -> colorToHex(neutral);
-            case Positive -> colorToHex(positive);
-            case VeryPositive -> colorToHex(veryPositive);
-        };
-    }
-
-    public static String colorToHex(Color color) {
-        int red = color.getRed();
-        int green = color.getGreen();
-        int blue = color.getBlue();
-
-        return String.format("#%02X%02X%02X", red, green, blue);
-    }
-
-
-    private static String isSarcasm(Review.Sentiment sentiment, int rating) {
-        if(sentiment.ordinal() >= 2 && rating < 3) return "Yes";
-        if(sentiment.ordinal() < 2 && rating >= 3) return "Yes";
-        return "No";
-    }
-
-    private static void log(String message){
-        if(debugMode){
-            String timeStamp = getTimeStamp(LocalDateTime.now());
-            // TODO: add log to file
-            System.out.printf("%s %s%n",timeStamp,message);
-        }
-    }
-
-    private static String getTimeStamp(LocalDateTime now) {
-        return "[%s.%s.%s - %s:%s:%s]".formatted(
-                now.getDayOfMonth() > 9 ? now.getDayOfMonth() : "0"+ now.getDayOfMonth(),
-                now.getMonthValue() > 9 ? now.getMonthValue() : "0"+ now.getMonthValue(),
-                now.getYear(),
-                now.getHour() > 9 ? now.getHour() : "0"+ now.getHour(),
-                now.getMinute() > 9 ? now.getMinute() : "0"+ now.getMinute(),
-                now.getSecond() > 9 ? now.getSecond() : "0"+ now.getSecond());
-    }
-
-    private static void openFinishedRequest() {
-        System.out.println("Enter request id:");
-        System.out.print(">> ");
-        String requestIdStr = readLine();
-        int requestId;
-
-        // get a valid request id
-        try{
-            requestId = Integer.parseInt(requestIdStr);
-        } catch (NumberFormatException e){
-            System.out.println("\nInvalid request id");
-            return;
-        }
-
-        if(clientRequestsStatusMap.get(requestId) == Status.DONE){
-            String path = getFolderPath() + "/output files/" + clientRequestMap.get(requestId).fileName().substring(0, clientRequestMap.get(requestId).fileName().lastIndexOf(".")) + ".html";
-            try {
-                Desktop.getDesktop().open(new File(path));
-                System.out.println("\nFile opened successfully.");
-                waitForEnter();
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }
-    }
-
-    private static void showRequests() {
-        TablePrinter table = new TablePrinter("Request id","File name","Status");
-        for (Map.Entry<Integer, ClientRequest> entry : clientRequestMap.entrySet()) {
-            table.addEntry(entry.getKey().toString(),
-                    entry.getValue().fileName(),
-                    clientRequestsStatusMap.get(entry.getKey()).toString());
-        }
-        System.out.println(table);
-        waitForEnter();
-    }
-
-    private static void waitForEnter() {
-        System.out.print("Press enter to continue");
-        try {
-            System.in.read();
-            while(System.in.available() > 0){
-                System.in.read();
-            }
-        } catch (IOException ignored) {}
-    }
+    // ============================================================================ |
+    // ========================  MAIN FLOW FUNCTIONS  ============================= |
+    // ============================================================================ |
 
     private static void sendNewRequest() {
         System.out.print("File name: ");
@@ -499,6 +309,111 @@ public class ClientMainClass {
         waitForEnter();
     }
 
+    private static void showRequests() {
+        TablePrinter table = new TablePrinter("Request id","File name","Status");
+        for (Map.Entry<Integer, ClientRequest> entry : clientRequestMap.entrySet()) {
+            table.addEntry(entry.getKey().toString(),
+                    entry.getValue().fileName(),
+                    clientRequestsStatusMap.get(entry.getKey()).toString());
+        }
+        System.out.println(table);
+        waitForEnter();
+    }
+
+    private static void openFinishedRequest() {
+        System.out.println("Enter request id:");
+        System.out.print(">> ");
+        String requestIdStr = readLine();
+        int requestId;
+
+        // get a valid request id
+        try{
+            requestId = Integer.parseInt(requestIdStr);
+        } catch (NumberFormatException e){
+            System.out.println("\nInvalid request id");
+            return;
+        }
+
+        if(clientRequestsStatusMap.get(requestId) == Status.DONE){
+            String path = getFolderPath() + "/output files/" + clientRequestMap.get(requestId).fileName().substring(0, clientRequestMap.get(requestId).fileName().lastIndexOf(".")) + ".html";
+            try {
+                Desktop.getDesktop().open(new File(path));
+                System.out.println("\nFile opened successfully.");
+                waitForEnter();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    private static void checkForFinishedRequests(){
+        ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
+                .queueUrl(getQueueURL(USER_OUTPUT_QUEUE_NAME))
+                .waitTimeSeconds(1)
+                .build();
+
+        ReceiveMessageResponse r;
+        do{
+            r = sqs.receiveMessage(messageRequest);
+            if(r.hasMessages()){
+                handleFinishedRequests(r.messages());
+            }
+        } while(r.hasMessages());
+    }
+
+    private static void handleFinishedRequests(List<Message> messages) {
+        for(Message m: messages){
+            CompletedClientRequest completedRequest = JsonUtils.deserialize(m.body(),CompletedClientRequest.class);
+            if(completedRequest.clientId().equals(clientId)){
+                clientRequestsStatusMap.put(completedRequest.requestId(),Status.DONE);
+                String output = downloadFromS3(completedRequest.output());
+                createHtmlFile(output,clientRequestMap.get(completedRequest.requestId()).fileName());
+                deleteFromQueue(m,USER_OUTPUT_QUEUE_NAME);
+                newFinishedRequest.set(true);
+            }
+        }
+    }
+
+    private static void createHtmlFile(String output, String fileName) {
+
+        String[] jsons = output.split("\n");
+
+        List<TitleReviews> titleReviews = Arrays.stream(jsons)
+                .map(tr -> JsonUtils.<TitleReviews>deserialize(tr, TitleReviews.class))
+                .toList();
+
+        String[] baseRowParts = BASE_HTML_ROW.split("%s");
+
+        List<String> rows = new LinkedList<>();
+        for(TitleReviews tr: titleReviews){
+            for(Review r: tr.reviews()){
+                rows.add(baseRowParts[0] + getBackgroundColor(r.sentiment()) + baseRowParts[1] +
+                        tr.title() + baseRowParts[2] +
+                        r.link() + baseRowParts[3] +
+                        r.link() + baseRowParts[4] +
+                        r.entitiesToString() + baseRowParts[5] +
+                        isSarcasm(r.sentiment(),r.rating()) + baseRowParts[6]);
+            }
+        }
+
+        String[] baseHtmlDocParts = BASE_HTML_DOC.split("%s");
+        StringBuilder docBuilder = new StringBuilder();
+        docBuilder.append(baseHtmlDocParts[0]).append(fileName).append(baseHtmlDocParts[1]).append(fileName).append(baseHtmlDocParts[2]);
+        for(String row: rows){
+            docBuilder.append(row).append("\n");
+        }
+        docBuilder.append(baseHtmlDocParts[3]);
+
+        String pathToWrite = getFolderPath() + "/output files/" + fileName.substring(0, fileName.lastIndexOf(".")) + ".html";
+        File file = new File(pathToWrite);
+        file.getParentFile().mkdirs();
+        try(BufferedWriter writer = new BufferedWriter(new FileWriter(pathToWrite))){
+            writer.write(docBuilder.toString());
+        } catch (IOException e) {
+            log("Failed to write html file, "+ e);
+        }
+    }
+
     private static void sendClientRequest(String fileName, int reviewsPerWorker, boolean terminate) throws IOException {
         String input = readInputFile(fileName);
         String pathInS3 = "temp/%s/%s___%s".formatted(clientId, UUID.randomUUID(), fileName);
@@ -508,21 +423,22 @@ public class ClientMainClass {
         clientRequestMap.put(requestId, toSave);
         clientRequestsStatusMap.put(requestId, Status.IN_PROGRESS);
         requestId++;
-        sqs.sendMessage(SendMessageRequest.builder()
-                      .queueUrl(getQueueURL(USER_INPUT_QUEUE_NAME))
-                      .messageBody(JsonUtils.serialize(toSend))
-            .build());
+        sendToQueue(USER_INPUT_QUEUE_NAME, JsonUtils.serialize(toSend));
     }
 
+
+    // ============================================================================ |
+    // ========================  AWS API FUNCTIONS  =============================== |
+    // ============================================================================ |
     private static void startManagerIfNotExists() {
 
         if(noManager) return;
 
         var r = ec2.describeInstances(DescribeInstancesRequest.builder()
                 .filters(Filter.builder()
-                        .name("tag:Name")
-                        .values("ManagerInstance")
-                        .build(),
+                                .name("tag:Name")
+                                .values("ManagerInstance")
+                                .build(),
                         Filter.builder()
                                 .name("instance-state-name")
                                 .values("running")
@@ -552,25 +468,6 @@ public class ClientMainClass {
         }
     }
 
-    private static String getUserDataScript() {
-        String debugFlags = "";
-        if(debugMode){
-            debugFlags = "-d";
-            if(uploadLogs){
-                debugFlags += " -ul manager.log -ui %d".formatted(appendLogIntervalInSeconds);
-            }
-        }
-        if(noEc2){
-           debugFlags+= " -noEc2";
-        }
-
-        return """
-                #!/bin/bash
-                cd /runtimedir
-                java -jar managerProgram.jar %s > output.log 2>&1
-                sudo shutdown -h now""".formatted(debugFlags);
-    }
-
     private static String getQueueURL(String queueName){
         return SQS_DOMAIN_PREFIX+queueName;
     }
@@ -581,7 +478,6 @@ public class ClientMainClass {
                 .key("files/"+ fileName)
                 .build(), RequestBody.fromString(input));
     }
-
     private static String downloadFromS3(String key) {
         var r = s3.getObject(GetObjectRequest.builder()
                 .bucket(BUCKET_NAME)
@@ -597,6 +493,44 @@ public class ClientMainClass {
         return new String(file);
     }
 
+    private static void deleteFromQueue(Message message, String queueName) {
+        sqs.deleteMessage(DeleteMessageRequest.builder()
+                .queueUrl(getQueueURL(queueName))
+                .receiptHandle(message.receiptHandle())
+                .build());
+    }
+
+    private static void sendToQueue(String queueName, String messageBody) {
+        SendMessageRequest.Builder builder = SendMessageRequest.builder()
+                .queueUrl(getQueueURL(queueName))
+                .messageBody(messageBody);
+        sqs.sendMessage(builder.build());
+    }
+
+    private static String getUserDataScript() {
+        String debugFlags = "";
+        if(debugMode){
+            debugFlags = "-d";
+            if(uploadLogs){
+                debugFlags += " -ul manager.log -ui %d".formatted(appendLogIntervalInSeconds);
+            }
+        }
+        if(noEc2){
+            debugFlags+= " -noEc2";
+        }
+
+        return """
+                #!/bin/bash
+                cd /runtimedir
+                java -jar managerProgram.jar %s > output.log 2>&1
+                sudo shutdown -h now""".formatted(debugFlags);
+    }
+
+
+
+    // ============================================================================ |
+    // ========================  UTILITY FUNCTIONS  =============================== |
+    // ============================================================================ |
     public static String readInputFile(String fileName) throws IOException {
         String path = getFolderPath()+"/input files/"+fileName;
         StringBuilder stringBuilder = new StringBuilder();
@@ -617,13 +551,36 @@ public class ClientMainClass {
         folderPath = folderPath.substring(0,folderPath.lastIndexOf("/")); // exit jar
         return folderPath;
     }
-
     private static void printUsageAndExit(String errorMessage) {
         if(! errorMessage.equals("")) {
             System.out.println(errorMessage);
         }
         System.out.println(USAGE);
         System.exit(1);
+    }
+
+    private static String stackTraceToString(Exception e) {
+        StringBuilder output  = new StringBuilder();
+        output.append(e).append("\n");
+        for (var element: e.getStackTrace()) {
+            output.append("\t").append(element).append("\n");
+        }
+        return output.toString();
+    }
+
+    private static void handleException(Exception e) {
+        if(e instanceof TerminateException){
+            System.exit(0);
+        }
+
+        String timeStamp = getTimeStamp(LocalDateTime.now());
+        String message = "Exception occurred\n%s".formatted(stackTraceToString(e));
+
+        try(BufferedWriter writer = new BufferedWriter(new FileWriter(log,true))){
+            writer.write("%s %s%n".formatted(timeStamp,message));
+        } catch (IOException ignored) {}
+
+        log(message);
     }
 
     private static void readArgs(String[] args) {
@@ -690,5 +647,75 @@ public class ClientMainClass {
         if(uploadLogs && appendLogIntervalInSeconds == 0){
             appendLogIntervalInSeconds = 60;
         }
+    }
+
+    private static String readLine() {
+        StringBuilder input = new StringBuilder();
+        try {
+            input.append((char) System.in.read());
+            while(System.in.available() > 0){
+                input.append((char) System.in.read());
+            }
+            input.deleteCharAt(input.length()-1);
+        } catch (IOException ignored) {}
+        return input.toString();
+    }
+
+    private static void waitForEnter() {
+        System.out.print("Press enter to continue");
+        try {
+            System.in.read();
+            while(System.in.available() > 0){
+                System.in.read();
+            }
+        } catch (IOException ignored) {}
+    }
+
+    private static void log(String message){
+        if(debugMode){
+            String timeStamp = getTimeStamp(LocalDateTime.now());
+            System.out.printf("%s %s%n",timeStamp,message);
+        }
+    }
+
+    private static String getTimeStamp(LocalDateTime now) {
+        return "[%s.%s.%s - %s:%s:%s]".formatted(
+                now.getDayOfMonth() > 9 ? now.getDayOfMonth() : "0"+ now.getDayOfMonth(),
+                now.getMonthValue() > 9 ? now.getMonthValue() : "0"+ now.getMonthValue(),
+                now.getYear(),
+                now.getHour() > 9 ? now.getHour() : "0"+ now.getHour(),
+                now.getMinute() > 9 ? now.getMinute() : "0"+ now.getMinute(),
+                now.getSecond() > 9 ? now.getSecond() : "0"+ now.getSecond());
+    }
+
+    public static String colorToHex(Color color) {
+        int red = color.getRed();
+        int green = color.getGreen();
+        int blue = color.getBlue();
+
+        return String.format("#%02X%02X%02X", red, green, blue);
+    }
+
+    private static String isSarcasm(Review.Sentiment sentiment, int rating) {
+        if(sentiment.ordinal() >= 2 && rating < 3) return "Yes";
+        if(sentiment.ordinal() < 2 && rating >= 3) return "Yes";
+        return "No";
+    }
+
+    private static String getBackgroundColor(Review.Sentiment sentiment) {
+
+        Color veryNegative = new Color(110, 1, 1);
+        Color negative = new Color(255, 51, 51, 255);
+        Color neutral = new Color(0, 0, 0);
+        Color positive = new Color(68, 232, 66);
+        Color veryPositive = new Color(2, 77, 0);
+
+        return switch(sentiment){
+            case VeryNegative -> colorToHex(veryNegative);
+            case Negative -> colorToHex(negative);
+            case Neutral -> colorToHex(neutral);
+            case Positive -> colorToHex(positive);
+            case VeryPositive -> colorToHex(veryPositive);
+        };
     }
 }
