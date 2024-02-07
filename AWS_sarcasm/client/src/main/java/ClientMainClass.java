@@ -175,7 +175,7 @@ public class ClientMainClass {
         clientRequestsStatusMap = new HashMap<>();
         newFinishedRequest = new AtomicBoolean(false);
         log = new File(getFolderPath() + "/client_log.text");
-
+        
         Box<Exception> exceptionHandler = new Box<>(null);
 
         while(true) {
@@ -223,10 +223,7 @@ public class ClientMainClass {
                         System.out.println("\nExiting");
                         throw new TerminateException();
                     }
-                    default -> {
-                        log("choice: '%s'.".formatted(choice));
-                        System.out.println("\nInvalid choice");
-                    }
+                    default -> System.out.println("\nInvalid choice");
                 }
             }
             catch(Exception e) {
@@ -504,8 +501,6 @@ public class ClientMainClass {
                 sudo shutdown -h now""".formatted(debugFlags);
     }
 
-
-
     // ============================================================================ |
     // ========================  UTILITY FUNCTIONS  =============================== |
     // ============================================================================ |
@@ -641,18 +636,12 @@ public class ClientMainClass {
                 input.append((char) c);
             }
         } catch (IOException ignored) {}
-        log("User input: "+input.toString().replace("\n","'newline'"));
         return input.toString();
     }
 
     private static void waitForEnter() {
         System.out.print("Press enter to continue");
-        try {
-            System.in.read();
-            while(System.in.available() > 0){
-                System.in.read();
-            }
-        } catch (IOException ignored) {}
+        readLine();
     }
 
     private static void log(String message){
