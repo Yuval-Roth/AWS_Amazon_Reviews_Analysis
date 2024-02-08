@@ -146,19 +146,26 @@ public class ClientMainClass {
         try {
             AwsCredentialsReader credReader = new AwsCredentialsReader();
             awsCreds.set(credReader.getCredentials());
-        } catch (FileNotFoundException e) {
-            System.out.println("Credentials file not found.");
-            System.out.println("Make sure the credentials file is in the same directory as the jar file,");
-            System.out.println("is named 'credentials.txt' and contains the following:");
-            System.out.println("aws_access_key_id = <your access key>");
-            System.out.println("aws_secret_access_key = <your secret key>");
-            System.out.println("aws_session_token = <your session token>");
-            System.out.println("\nExiting...");
+        } catch (AwsCredentialsReader.CredentialsReaderException e) {
+            System.out.println(e.getMessage());
             System.exit(0);
         }
 
 
         readArgs(args);
+
+        requestId = 0;
+        clientId = UUID.randomUUID().toString();
+        clientRequestMap = new HashMap<>();
+        clientRequestsStatusMap = new HashMap<>();
+        newFinishedRequest = new AtomicBoolean(false);
+        log = new File(getFolderPath() + "client_log.text");
+
+        // create folders for input and output files
+        File inputFolder = new File(getFolderPath() + "/input_files");
+        File outputFolder = new File(getFolderPath() + "/output_files");
+        inputFolder.mkdirs();
+        outputFolder.mkdirs();
 
         sqs = SqsClient.builder()
                 .region(ec2_region)
@@ -178,13 +185,21 @@ public class ClientMainClass {
 
         if(! noManager){
             try{
+                // get manager image id
                 var r =  ec2.describeImages(DescribeImagesRequest.builder()
                         .filters(Filter.builder()
                                 .name("name")
                                 .values("managerImage")
                                 .build())
                         .build());
+
+                //this will throw an exception if no manager image is found
                 MANAGER_IMAGE_ID = r.images().getFirst().imageId();
+
+                if(createInputQueueIfNotExists()){
+                    log("Created input queue");
+                }
+
             } catch(NoSuchElementException e){
                 log("No manager image found");
                 handleException(new TerminateException());
@@ -202,13 +217,6 @@ public class ClientMainClass {
                 System.exit(0);
             }
         }
-
-        requestId = 0;
-        clientId = UUID.randomUUID().toString();
-        clientRequestMap = new HashMap<>();
-        clientRequestsStatusMap = new HashMap<>();
-        newFinishedRequest = new AtomicBoolean(false);
-        log = new File(getFolderPath() + "client_log.text");
 
         Box<Exception> exceptionHandler = new Box<>(null);
 
@@ -344,7 +352,7 @@ public class ClientMainClass {
         }
 
         if(clientRequestsStatusMap.get(requestId) == Status.DONE){
-            String path = getFolderPath() + "/output files/" + clientRequestMap.get(requestId).fileName().substring(0, clientRequestMap.get(requestId).fileName().lastIndexOf(".")) + ".html";
+            String path = getFolderPath() + "/output_files/" + clientRequestMap.get(requestId).fileName().substring(0, clientRequestMap.get(requestId).fileName().lastIndexOf(".")) + ".html";
             try {
                 Desktop.getDesktop().open(new File(path));
                 System.out.println("\nFile opened successfully.");
@@ -362,12 +370,18 @@ public class ClientMainClass {
                 .build();
 
         ReceiveMessageResponse r;
-        do{
-            r = sqs.receiveMessage(messageRequest);
-            if(r.hasMessages()){
-                handleFinishedRequests(r.messages());
-            }
-        } while(r.hasMessages());
+        try{
+            do{
+                r = sqs.receiveMessage(messageRequest);
+                if(r.hasMessages()){
+                    handleFinishedRequests(r.messages());
+                }
+            } while(r.hasMessages());
+        } catch (QueueDoesNotExistException ignored){
+            try {
+                Thread.sleep(10000);
+            } catch (InterruptedException ignored2) {}
+        }
     }
 
     private static void handleFinishedRequests(List<Message> messages) {
@@ -413,7 +427,7 @@ public class ClientMainClass {
         }
         docBuilder.append(baseHtmlDocParts[3]);
 
-        String pathToWrite = getFolderPath() + "/output files/" + fileName.substring(0, fileName.lastIndexOf(".")) + ".html";
+        String pathToWrite = getFolderPath() + "/output_files/" + fileName.substring(0, fileName.lastIndexOf(".")) + ".html";
         File file = new File(pathToWrite);
         file.getParentFile().mkdirs();
         try(BufferedWriter writer = new BufferedWriter(new FileWriter(pathToWrite))){
@@ -535,11 +549,28 @@ public class ClientMainClass {
                 sudo shutdown -h now""".formatted(debugFlags);
     }
 
+    private static boolean createInputQueueIfNotExists(){
+
+        boolean queueExists = sqs.listQueues(ListQueuesRequest.builder()
+                .queueNamePrefix(USER_INPUT_QUEUE_NAME)
+                .build()).hasQueueUrls();
+
+        if(! queueExists){
+            CreateQueueRequest createQueueRequest = CreateQueueRequest.builder()
+                    .queueName(USER_INPUT_QUEUE_NAME)
+                    .build();
+
+            sqs.createQueue(createQueueRequest);
+            return true;
+        }
+        return false;
+    }
+
     // ============================================================================ |
     // ========================  UTILITY FUNCTIONS  =============================== |
     // ============================================================================ |
     public static String readInputFile(String fileName) throws IOException {
-        String path = getFolderPath()+"/input files/"+fileName;
+        String path = getFolderPath()+"/input_files/"+fileName;
         StringBuilder stringBuilder = new StringBuilder();
         String line;
         try(BufferedReader buffReader =  new BufferedReader(new FileReader(path))){
@@ -682,6 +713,9 @@ public class ClientMainClass {
         if(debugMode){
             String timeStamp = getTimeStamp(LocalDateTime.now());
             System.out.printf("%s %s%n",timeStamp,message);
+            try(BufferedWriter writer = new BufferedWriter(new FileWriter(log,true))){
+                writer.write("%s %s%n".formatted(timeStamp,message));
+            } catch (IOException ignored) {}
         }
     }
 

@@ -10,7 +10,7 @@ public class AwsCredentialsReader {
 
     private final Map<String,String> credentialsMap;
 
-    public AwsCredentialsReader() throws FileNotFoundException {
+    public AwsCredentialsReader() throws CredentialsReaderException {
         try {
             credentialsMap = new HashMap<>();
 
@@ -27,8 +27,16 @@ public class AwsCredentialsReader {
                 }
             }
         } catch (IOException e) {
-            if(e instanceof FileNotFoundException fnf){
-                throw fnf;
+            if(e instanceof FileNotFoundException){
+                throw new CredentialsReaderException("""
+                        Credentials file not found.
+                        Make sure the credentials file is in the same directory as the jar file,
+                        is named 'credentials.txt' and contains the following:
+                        aws_access_key_id = <your access key>
+                        aws_secret_access_key = <your secret key>
+                        aws_session_token = <your session token>
+                                    
+                        Exiting...""");
             }
             throw new RuntimeException(e);
         }
@@ -44,8 +52,16 @@ public class AwsCredentialsReader {
         return folderPath;
     }
 
-    public AwsSessionCredentials getCredentials(){
-        return AwsSessionCredentials.create(getAccessKeyId(),getSecretAccessKey(),getSessionToken());
+    public AwsSessionCredentials getCredentials() throws CredentialsReaderException {
+        String accessKeyId = getAccessKeyId();
+        String secretAccessKey = getSecretAccessKey();
+        String sessionToken = getSessionToken();
+
+        if(accessKeyId == null || secretAccessKey == null || sessionToken == null){
+            throw new CredentialsReaderException("Invalid credentials file");
+        }
+
+        return AwsSessionCredentials.create(accessKeyId, secretAccessKey, sessionToken);
     }
 
     private String getAccessKeyId(){
@@ -60,5 +76,10 @@ public class AwsCredentialsReader {
         return credentialsMap.get("aws_session_token");
     }
 
+    public static class CredentialsReaderException extends Exception {
+        public CredentialsReaderException(String message) {
+            super(message, null, false, false);
+        }
+    }
 }
 
