@@ -6,11 +6,14 @@ import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.sqs.SqsClient;
+import software.amazon.awssdk.services.sqs.model.Message;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
 import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
 
 import java.io.IOException;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -58,7 +61,9 @@ public class mainWorkerClass {
     private static SqsClient sqs;
     private static S3Client s3;
     private static Semaphore managerQueueLock;
-    private static Thread thread2;
+    private static Map<String, Pair<LocalTime,Message>> currentMessages;
+    private static Semaphore currentMessagesLock;
+    private static Long INVISIBILITY_TIMEOUT;
 
     public static void main(String[] args){
 
@@ -72,8 +77,16 @@ public class mainWorkerClass {
         s3 = S3Client.builder()
                 .region(Region.US_WEST_2)
                 .build();
+
         managerQueueLock = new Semaphore(1);
         logUploadLock = new Semaphore(1);
+        currentMessages = new HashMap<>();
+        currentMessagesLock = new Semaphore(2,true);
+
+        log("Worker started");
+        log("Upload logs: %s".formatted(uploadLogs));
+        log("log name: %s".formatted(uploadLogName));
+        log("Upload interval: %s".formatted(appendLogIntervalInSeconds));
 
         if(uploadLogs){
             nextLogUpload = System.currentTimeMillis() + appendLogIntervalInSeconds * 1000L;
@@ -85,31 +98,34 @@ public class mainWorkerClass {
 
         // init sentiment analysis handler and Entity recognition handler
         // this is done on two threads to save time
-        thread2 = new Thread(() -> sentimentAnalysisHandler = SentimentAnalysisHandler.getInstance());
-        thread2.start();
+        Thread secondaryThread = new Thread(() -> sentimentAnalysisHandler = SentimentAnalysisHandler.getInstance());
+        secondaryThread.start();
         namedEntityRecognitionHandler = NamedEntityRecognitionHandler.getInstance();
         try {
-            thread2.join();
+            secondaryThread.join();
         } catch (InterruptedException ignored) {}
 
-        final Exception[] exceptionHandler = new Exception[1];
+        Box<Exception> exceptionHandler = new Box<>(null);
         // start main loop
         while(true) {
-            thread2 = new Thread(() -> mainLoop(exceptionHandler),"secondary");
-            thread2.start();
+            secondaryThread = new Thread(() -> mainLoop(exceptionHandler),"secondary");
+            Thread visibilityExtender = new Thread(() -> visibilityExtenderLoop(exceptionHandler));
+
+            secondaryThread.start();
+            visibilityExtender.start();
             mainLoop(exceptionHandler);
 
             try {
-                thread2.join();
+                secondaryThread.join();
             } catch (InterruptedException ignored) {}
-            if(exceptionHandler[0] != null){
-                handleException(exceptionHandler[0]);
-                exceptionHandler[0] = null;
+            if(exceptionHandler.get() != null){
+                handleException(exceptionHandler.get());
+                exceptionHandler.set(null);
             }
         }
     }
 
-    private static void mainLoop(Exception[] exceptionHandler) {
+    private static void mainLoop(Box<Exception> exceptionHandler) {
 
         ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
                 .maxNumberOfMessages(1)
@@ -119,14 +135,22 @@ public class mainWorkerClass {
         nextLogUpload = System.currentTimeMillis() + appendLogIntervalInSeconds * 1000L;
 
         // Main loop
-        while(exceptionHandler[0] == null){
+        while(exceptionHandler.get() == null){
             try{
                 // Receive message from in queue
                 var request = sqs.receiveMessage(messageRequest);
                 if(request.hasMessages()){
 
+                    Message message = request.messages().getFirst();
+
+                    // Set message invisibility timeout time
+                    currentMessagesLock.acquire();
+                    currentMessages.put(Thread.currentThread().getName(),
+                            Pair.of(LocalTime.now().plusSeconds(INVISIBILITY_TIMEOUT),message));
+                    currentMessagesLock.release();
+
                     // Deserialize job
-                    Job job = JsonUtils.deserialize(request.messages().getFirst().body(),Job.class);
+                    Job job = JsonUtils.deserialize(message.body(),Job.class);
 
                     if(job.action() == Job.Action.PROCESS) {
 
@@ -144,13 +168,13 @@ public class mainWorkerClass {
                     }
 
                     // Delete message from in queue
-                    sqs.deleteMessage(software.amazon.awssdk.services.sqs.model.DeleteMessageRequest.builder()
-                            .queueUrl(IN_QUEUE_URL)
-                            .receiptHandle(request.messages().getFirst().receiptHandle())
-                            .build());
+                    currentMessagesLock.acquire();
+                    deleteFromQueue(IN_QUEUE_URL, message);
+                    currentMessages.remove(Thread.currentThread().getName());
+                    currentMessagesLock.release();
 
                 } else {
-                    if(exceptionHandler[0] == null){
+                    if(exceptionHandler.get() == null){
                         try {
                             Thread.sleep(1000);
                         } catch (InterruptedException e) {
@@ -169,10 +193,65 @@ public class mainWorkerClass {
 
                 checkForShutdown();
             } catch (Exception e){
-                exceptionHandler[0] = e;
+                exceptionHandler.set(e);
+
+                // reset visibility timeout of message if exception occurs
+                // this is done to allow another worker to process the message
+                Message toReset = currentMessages.get(Thread.currentThread().getName()).getSecond();
+                if(toReset != null){
+                    setMessageVisibilityTimeout(toReset,0);
+                }
                 return;
             }
         }
+    }
+
+    private static void visibilityExtenderLoop(Box<Exception> exceptionHandler){
+        while(exceptionHandler.get() == null){
+            try{
+
+                currentMessagesLock.acquire(2);
+                for(var pair : currentMessages.values()){
+                    LocalTime time = pair.getFirst();
+                    Message message = pair.getSecond();
+
+                    if(LocalTime.now().plusSeconds(20).isAfter(time)){
+                        setMessageVisibilityTimeout(message, INVISIBILITY_TIMEOUT.intValue());
+                        pair.setFirst(LocalTime.now().plusSeconds(INVISIBILITY_TIMEOUT));
+                        Job job = JsonUtils.deserialize(message.body(),Job.class);
+                        log("extended invisibility of job: %s".formatted(job.jobId()));
+                    }
+                }
+                currentMessagesLock.release(2);
+
+
+                if(exceptionHandler.get() == null){
+                    try {
+                        Thread.sleep(5000);
+                    } catch (InterruptedException ignored) {}
+                }
+
+
+            } catch (Exception e){
+                exceptionHandler.set(e);
+                return;
+            }
+        }
+    }
+
+    private static void setMessageVisibilityTimeout(Message message, int timeout) {
+        sqs.changeMessageVisibility(software.amazon.awssdk.services.sqs.model.ChangeMessageVisibilityRequest.builder()
+                .queueUrl(IN_QUEUE_URL)
+                .receiptHandle(message.receiptHandle())
+                .visibilityTimeout(timeout)
+                .build());
+    }
+
+    private static void deleteFromQueue(String inQueueUrl, Message message) {
+        sqs.deleteMessage(software.amazon.awssdk.services.sqs.model.DeleteMessageRequest.builder()
+                .queueUrl(inQueueUrl)
+                .receiptHandle(message.receiptHandle())
+                .build());
     }
 
     private static void checkForShutdown() throws TerminateException {
@@ -185,14 +264,12 @@ public class mainWorkerClass {
                     .queueUrl(MANAGER_QUEUE_URL)
                     .build());
             if(request.hasMessages()){
-                Job job = JsonUtils.deserialize(request.messages().getFirst().body(),Job.class);
+                Message message = request.messages().getFirst();
+                Job job = JsonUtils.deserialize(message.body(),Job.class);
                 if(job.action() != Job.Action.SHUTDOWN){
                     throw new IllegalStateException("Expected shutdown message, got: "+job.action());
                 }
-                sqs.deleteMessage(software.amazon.awssdk.services.sqs.model.DeleteMessageRequest.builder()
-                        .queueUrl(MANAGER_QUEUE_URL)
-                        .receiptHandle(request.messages().getFirst().receiptHandle())
-                        .build());
+                deleteFromQueue(MANAGER_QUEUE_URL, message);
 
                 throw new TerminateException();
                 // don't release lock if shutting down
@@ -344,6 +421,7 @@ public class mainWorkerClass {
         argsList.add("-outqueueurl");
         argsList.add("-managerqueueurl");
         argsList.add("-s3bucketname");
+        argsList.add("-timeout");
 
         for (int i = 0; i < args.length; i++) {
             String arg = args[i].toLowerCase();
@@ -424,6 +502,24 @@ public class mainWorkerClass {
                 }
             }
 
+            if (arg.equals("-timeout")) {
+                errorMessage = "Missing S3 bucket name\n";
+                try{
+                    if(argsList.contains(args[i+1])){
+                        printUsageAndExit(errorMessage);
+                    }
+                    INVISIBILITY_TIMEOUT = Long.parseLong(args[i+1]);
+                    i++;
+                    continue;
+                } catch (IndexOutOfBoundsException e){
+                    System.out.println();
+                    printUsageAndExit(errorMessage);
+                } catch (NumberFormatException e){
+                    System.out.println();
+                    printUsageAndExit("Invalid timeout\n");
+                }
+
+            }
 
             if (debugModeOptions.contains(arg)) {
                 debugMode = true;
@@ -467,6 +563,25 @@ public class mainWorkerClass {
             printUsageAndExit("Unknown argument: %s\n".formatted(arg));
         }
 
+        if(INVISIBILITY_TIMEOUT == null){
+            printUsageAndExit("Timeout argument was not supplied\n");
+        }
+        if(WORKER_ID == null){
+            printUsageAndExit("Worker id argument was not supplied\n");
+        }
+        if(IN_QUEUE_URL == null){
+            printUsageAndExit("In queue url argument was not supplied\n");
+        }
+        if(OUT_QUEUE_URL == null){
+            printUsageAndExit("Out queue url argument was not supplied\n");
+        }
+        if(MANAGER_QUEUE_URL == null){
+            printUsageAndExit("Manager queue url argument was not supplied\n");
+        }
+        if(BUCKET_NAME == null){
+            printUsageAndExit("S3 bucket name argument was not supplied\n");
+        }
+
         if(uploadLogs && ! debugMode){
             printUsageAndExit("Upload logs flag was provided but not debug mode flag\n");
         }
@@ -474,10 +589,5 @@ public class mainWorkerClass {
         if(uploadLogs && appendLogIntervalInSeconds == 0){
             appendLogIntervalInSeconds = 60;
         }
-
-        log("Worker started");
-        log("Upload logs: %s".formatted(uploadLogs));
-        log("log name: %s".formatted(uploadLogName));
-        log("Upload interval: %s".formatted(appendLogIntervalInSeconds));
     }
 }

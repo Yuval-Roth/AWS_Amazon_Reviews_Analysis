@@ -154,7 +154,7 @@ public class ClientMainClass {
             System.out.println("aws_secret_access_key = <your secret key>");
             System.out.println("aws_session_token = <your session token>");
             System.out.println("\nExiting...");
-            System.exit(1);
+            System.exit(0);
         }
 
 
@@ -199,7 +199,7 @@ public class ClientMainClass {
                     System.out.println("Exiting...");
                     log("Failed to get manager image id for an unknown reason.\n%s".formatted(stackTraceToString(e)));
                 }
-                System.exit(1);
+                System.exit(0);
             }
         }
 
@@ -350,7 +350,7 @@ public class ClientMainClass {
                 System.out.println("\nFile opened successfully.");
                 waitForEnter();
             } catch (IOException e) {
-                e.printStackTrace();
+                handleException(e);
             }
         }
     }
@@ -419,7 +419,7 @@ public class ClientMainClass {
         try(BufferedWriter writer = new BufferedWriter(new FileWriter(pathToWrite))){
             writer.write(docBuilder.toString());
         } catch (IOException e) {
-            log("Failed to write html file, "+ e);
+            handleException(e);
         }
     }
 
@@ -563,7 +563,7 @@ public class ClientMainClass {
             System.out.println(errorMessage);
         }
         System.out.println(USAGE);
-        System.exit(1);
+        System.exit(0);
     }
 
     private static String stackTraceToString(Exception e) {

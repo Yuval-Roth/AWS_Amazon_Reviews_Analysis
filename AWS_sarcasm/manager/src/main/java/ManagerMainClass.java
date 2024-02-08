@@ -92,6 +92,7 @@ public class ManagerMainClass {
     private static AtomicInteger requiredWorkers;
     private static final int BATCH_REQUEST_MAX_BYTES = 262144;
     private static final int BATCH_REQUEST_MAX_ENTRIES = 10;
+    private static final int WORKER_IN_QUEUE_VISIBILITY_TIMEOUT = 60;
     // </APPLICATION DATA>
 
 
@@ -111,8 +112,6 @@ public class ManagerMainClass {
         ec2 = Ec2Client.builder()
                 .region(ec2_region)
                 .build();
-
-
 
         if(! noEc2){
             var r =  ec2.describeImages(DescribeImagesRequest.builder()
@@ -414,7 +413,7 @@ public class ManagerMainClass {
 
         boolean queuesCreated = false;
 
-        if(createQueueIfNotExists(WORKER_IN_QUEUE_NAME,300)) {
+        if(createQueueIfNotExists(WORKER_IN_QUEUE_NAME,WORKER_IN_QUEUE_VISIBILITY_TIMEOUT)) {
             log("Created queue: %s".formatted(WORKER_IN_QUEUE_NAME));
             queuesCreated = true;
         }
@@ -538,13 +537,14 @@ public class ManagerMainClass {
         return """
                 #!/bin/bash
                 cd /runtimedir
-                java -Xmx7000m -jar workerProgram.jar -workerId %d -inQueueUrl %s -outQueueUrl %s -managerQueueUrl %s -s3BucketName %s %s > output.log 2>&1
+                java -Xmx7000m -jar workerProgram.jar -workerId %d -inQueueUrl %s -outQueueUrl %s -managerQueueUrl %s -s3BucketName %s -timeout %d %s > output.log 2>&1
                 sudo shutdown -h now""".formatted(
                 instanceIdCounter,
                 getQueueURL(WORKER_IN_QUEUE_NAME),
                 getQueueURL(WORKER_OUT_QUEUE_NAME),
                 getQueueURL(WORKER_MANAGEMENT_QUEUE_NAME),
                 BUCKET_NAME,
+                WORKER_IN_QUEUE_VISIBILITY_TIMEOUT,
                 debugFlags
         );
     }
