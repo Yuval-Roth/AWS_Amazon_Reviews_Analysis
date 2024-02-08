@@ -162,8 +162,8 @@ public class ClientMainClass {
         log = new File(getFolderPath() + "client_log.text");
 
         // create folders for input and output files
-        File inputFolder = new File(getFolderPath() + "/input_files");
-        File outputFolder = new File(getFolderPath() + "/output_files");
+        File inputFolder = new File(getFolderPath() + "input_files");
+        File outputFolder = new File(getFolderPath() + "output_files");
         inputFolder.mkdirs();
         outputFolder.mkdirs();
 
@@ -352,7 +352,7 @@ public class ClientMainClass {
         }
 
         if(clientRequestsStatusMap.get(requestId) == Status.DONE){
-            String path = getFolderPath() + "/output_files/" + clientRequestMap.get(requestId).fileName().substring(0, clientRequestMap.get(requestId).fileName().lastIndexOf(".")) + ".html";
+            String path = getFolderPath() + "output_files/" + clientRequestMap.get(requestId).fileName().substring(0, clientRequestMap.get(requestId).fileName().lastIndexOf(".")) + ".html";
             try {
                 Desktop.getDesktop().open(new File(path));
                 System.out.println("\nFile opened successfully.");
@@ -427,7 +427,7 @@ public class ClientMainClass {
         }
         docBuilder.append(baseHtmlDocParts[3]);
 
-        String pathToWrite = getFolderPath() + "/output_files/" + fileName.substring(0, fileName.lastIndexOf(".")) + ".html";
+        String pathToWrite = getFolderPath() + "output_files/" + fileName.substring(0, fileName.lastIndexOf(".")) + ".html";
         File file = new File(pathToWrite);
         file.getParentFile().mkdirs();
         try(BufferedWriter writer = new BufferedWriter(new FileWriter(pathToWrite))){
@@ -570,7 +570,7 @@ public class ClientMainClass {
     // ========================  UTILITY FUNCTIONS  =============================== |
     // ============================================================================ |
     public static String readInputFile(String fileName) throws IOException {
-        String path = getFolderPath()+"/input_files/"+fileName;
+        String path = getFolderPath()+"input_files/"+fileName;
         StringBuilder stringBuilder = new StringBuilder();
         String line;
         try(BufferedReader buffReader =  new BufferedReader(new FileReader(path))){
@@ -586,7 +586,7 @@ public class ClientMainClass {
         folderPath = folderPath.replace("%20"," "); //fix space character
         folderPath = folderPath.substring(folderPath.indexOf("/")+1); // remove initial '/'
         folderPath = folderPath.substring(0,folderPath.lastIndexOf("/")); // remove .class file from path
-        folderPath = folderPath.substring(0,folderPath.lastIndexOf("/")); // exit jar
+        folderPath = folderPath.substring(0,folderPath.lastIndexOf("/")+1); // exit jar
         return folderPath;
     }
     private static void printUsageAndExit(String errorMessage) {
