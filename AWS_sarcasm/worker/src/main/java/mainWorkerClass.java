@@ -192,22 +192,20 @@ public class mainWorkerClass {
                 }
 
                 checkForShutdown();
-            } catch (Exception e){
-                exceptionHandler.set(e);
+            } catch (Exception | OutOfMemoryError e){
 
-                // reset visibility timeout of message if exception occurs
-                // this is done to allow another worker to process the message
-                Message toReset = currentMessages.get(Thread.currentThread().getName()).getSecond();
-                if(toReset != null){
-                    setMessageVisibilityTimeout(toReset,0);
-                }
+                exceptionHandler.set(e instanceof Exception e2 ? e2 : new RuntimeException(e));
+                returnJobToQueue();
                 return;
             }
         }
     }
 
     private static void visibilityExtenderLoop(Box<Exception> exceptionHandler){
-        while(exceptionHandler.get() == null){
+
+        // this thread cannot die. If it does, long jobs could be taken by another worker and processed again
+
+        while(! currentMessages.isEmpty() || exceptionHandler.get() == null){
             try{
 
                 currentMessagesLock.acquire(2);
@@ -224,19 +222,32 @@ public class mainWorkerClass {
                 }
                 currentMessagesLock.release(2);
 
-
                 if(exceptionHandler.get() == null){
                     try {
                         Thread.sleep(5000);
                     } catch (InterruptedException ignored) {}
                 }
 
-
-            } catch (Exception e){
-                exceptionHandler.set(e);
-                return;
+            } catch (Exception | OutOfMemoryError e){
+                currentMessagesLock.release(2);
+                Exception caught = e instanceof Exception e2 ? e2 : new RuntimeException(e);
+                exceptionHandler.set(caught);
+                log(stackTraceToString(caught));
             }
         }
+    }
+
+    private static void returnJobToQueue() {
+        Message toReset = currentMessages.get(Thread.currentThread().getName()).getSecond();
+        if(toReset != null){
+            setMessageVisibilityTimeout(toReset,0);
+        }
+        try {
+            currentMessagesLock.acquire();
+        } catch (InterruptedException ignored) {}
+        currentMessages.remove(Thread.currentThread().getName());
+        currentMessagesLock.release();
+        log("thread %s returned job to queue".formatted(Thread.currentThread().getName()));
     }
 
     private static void setMessageVisibilityTimeout(Message message, int timeout) {

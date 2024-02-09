@@ -159,7 +159,7 @@ public class ClientMainClass {
         clientRequestMap = new HashMap<>();
         clientRequestsStatusMap = new HashMap<>();
         newFinishedRequest = new AtomicBoolean(false);
-        log = new File(getFolderPath() + "client_log.text");
+        log = new File(getFolderPath() + "client_log.txt");
 
         // create folders for input and output files
         File inputFolder = new File(getFolderPath() + "input_files");
@@ -197,6 +197,7 @@ public class ClientMainClass {
                 MANAGER_IMAGE_ID = r.images().getFirst().imageId();
 
                 if(createInputQueueIfNotExists()){
+                    waitForQueueCreation();
                     log("Created input queue");
                 }
 
@@ -265,7 +266,10 @@ public class ClientMainClass {
                         System.out.println("\nExiting");
                         throw new TerminateException();
                     }
-                    default -> System.out.println("\nInvalid choice");
+                    default -> {
+                        log("input received: '%s'".formatted(choice));
+                        System.out.println("\nInvalid choice");
+                    }
                 }
             }
             catch(Exception e) {
@@ -566,6 +570,19 @@ public class ClientMainClass {
         return false;
     }
 
+    private static void waitForQueueCreation() {
+        boolean queuesReady;
+        do{
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException ignored) {}
+            queuesReady = new HashSet<>(sqs.listQueues().queueUrls())
+                    .containsAll(List.of(
+                            getQueueURL(USER_INPUT_QUEUE_NAME)));
+
+        } while(! queuesReady);
+    }
+
     // ============================================================================ |
     // ========================  UTILITY FUNCTIONS  =============================== |
     // ============================================================================ |
@@ -692,9 +709,9 @@ public class ClientMainClass {
         int c;
         try {
             while((c = System.in.read()) != -1){
-                if(c == '\n'){
+                if(c == '\r' || c == '\n'){
                     if(System.in.available() > 0){
-                        System.in.read(); // consume '\r'
+                        System.in.read(); // consume '\n' or '\r'
                     }
                     break;
                 }
