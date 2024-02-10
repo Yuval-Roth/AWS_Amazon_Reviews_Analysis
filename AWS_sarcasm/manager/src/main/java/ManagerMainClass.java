@@ -40,7 +40,7 @@ public class ManagerMainClass {
     private static final String WORKER_IN_QUEUE_NAME = "workerInQueue";
     private static final String WORKER_OUT_QUEUE_NAME = "workerOutQueue";
     private static final String WORKER_MANAGEMENT_QUEUE_NAME = "workerManagementQueue.fifo";
-    private static final String USER_INPUT_QUEUE_NAME = "userInputQueue";
+    private static final String USER_INPUT_QUEUE_NAME = "userInputQueue.fifo";
     private static final String USER_OUTPUT_QUEUE_NAME = "userOutputQueue";
     private static final String SQS_DOMAIN_PREFIX = "https://sqs.us-east-1.amazonaws.com/057325794177/";
     private static final int MAX_WORKERS = 8;
@@ -519,18 +519,18 @@ public class ManagerMainClass {
                 .instanceInitiatedShutdownBehavior(ShutdownBehavior.TERMINATE)
                 .maxCount(1)
                 .minCount(1)
-                .userData(Base64.getEncoder().encodeToString(getUserDataScript().getBytes()))
+                .userData(Base64.getEncoder().encodeToString(getUserDataScript(id).getBytes()))
                 .build();
         ec2.runInstances(runRequest);
     }
 
-    private static String getUserDataScript() {
+    private static String getUserDataScript(int id) {
 
         String debugFlags = "";
         if(debugMode){
             debugFlags = "-d";
             if(uploadLogs){
-                debugFlags += " -ul worker-%d.log -ui %d".formatted(instanceIdCounter, appendLogIntervalInSeconds);
+                debugFlags += " -ul worker-%d.log -ui %d".formatted(id, appendLogIntervalInSeconds);
             }
         }
 
