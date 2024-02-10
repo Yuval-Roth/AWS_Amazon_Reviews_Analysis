@@ -11,7 +11,7 @@ public class TablePrinter {
         this.columnWidths = new HashMap<>();
         for (String column : columnNames) {
             columns.put(column, new LinkedList<>());
-            columnWidths.put(column, 0);
+            columnWidths.put(column, column.length());
         }
     }
 
@@ -52,6 +52,18 @@ public class TablePrinter {
 
         sb.append("-".repeat(totalWidth)).append("\n"); // top border
 
+        //print headers
+        for (int i = 0; i < columnNames.size(); i++) {
+            // get next value and padding adjusted for value length
+            String name = columnNames.get(i);
+            String padding = paddings[i].substring(name.length());
+            // build the row
+            sb.append(name).append(padding).append(" | ");
+        }
+        sb.append("\n");
+        sb.append("-".repeat(totalWidth-1)).append("|").append("\n"); // mid border
+
+        //print rows
         while (iterators.getFirst().hasNext()){
             for(int i = 0; i < columnNames.size(); i++){
 

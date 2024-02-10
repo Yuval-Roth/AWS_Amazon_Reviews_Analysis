@@ -14,7 +14,7 @@ import java.io.*;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.IntStream;
 
 public class ClientMainClass {
     enum Status {
@@ -52,12 +52,21 @@ public class ClientMainClass {
 
     // <DEBUG FLAGS>
     private static final String USAGE = """
-                Usage: java -jar clientProgram.jar [-h | -help] [-d] [optional debug flags]
-                                    
+                Usage: java -jar clientProgram.jar [optional quick start args] [-h | -help]
+                                                   [-d] [optional debug flags]
+                
                 -h | -help :- Print this message and exit.
                                     
-                -d | -debug :- Run in debug mode, logging all operations to standard output
+                -d | -debug :- Run in debug mode, logging all operations to standard output.
+                   
+                optional quick start args:
                 
+                    inFileName1... inFileNameN outFileName1... outFileNameN n [terminate]
+                    
+                    n :- Reviews per worker.
+                    
+                    terminate :- send terminate signal.
+                                                                             
                 optional debug flags:
                     
                     -ul | -uploadLog :- Ec2 instances will upload their logs to the S3 bucket.
@@ -134,7 +143,9 @@ public class ClientMainClass {
             </html>""";
     private static Map<Integer,ClientRequest> clientRequestMap;
     private static Map<Integer,Status> clientRequestsStatusMap;
+    private static Map<Integer,String> clientRequestsOutputNames;
     private static File log;
+    private static boolean quickStartFlag;
     // </APPLICATION DATA>
 
     public static void main(String[] args) {
@@ -151,12 +162,14 @@ public class ClientMainClass {
         }
 
 
-        readArgs(args);
+        Map<String,Object> quickStart = readArgs(args);
+
 
         requestId = 0;
         clientId = UUID.randomUUID().toString();
         clientRequestMap = new HashMap<>();
         clientRequestsStatusMap = new HashMap<>();
+        clientRequestsOutputNames = new HashMap<>();
         log = new File(getFolderPath() + "client_log.txt");
 
         // create folders for input and output files
@@ -219,6 +232,11 @@ public class ClientMainClass {
 
         Box<Exception> exceptionHandler = new Box<>(null);
 
+        if(quickStartFlag){
+            quickStart((List<String>) quickStart.get("namesList"),
+                    (Integer) quickStart.get("reviewsPerWorker"),
+                    (Boolean) quickStart.get("terminate"));
+        }
         while(true) {
 
             Thread secondaryThread = new Thread(()->secondaryLoop(exceptionHandler) ,"secondary");
@@ -295,8 +313,10 @@ public class ClientMainClass {
     // ============================================================================ |
 
     private static void sendNewRequest() {
-        System.out.print("File name: ");
-        String fileName = readLine();
+        System.out.print("Input file name: ");
+        String inputFileName = readLine();
+        System.out.print("Output file name: ");
+        String outputFileName = readLine();
         System.out.print("Reviews per worker: ");
         String reviewsPerWorkerStr = readLine();
         int reviewsPerWorker;
@@ -314,7 +334,7 @@ public class ClientMainClass {
             return;
         }
         try {
-            sendClientRequest(fileName,reviewsPerWorker,terminate);
+            sendClientRequest(inputFileName,outputFileName,reviewsPerWorker,terminate);
         } catch (IOException e) {
             if(e instanceof FileNotFoundException) {
                 System.out.println("\nFile not found");
@@ -359,7 +379,7 @@ public class ClientMainClass {
         }
 
         if(clientRequestsStatusMap.get(requestId) == Status.DONE){
-            String path = getFolderPath() + "output_files/" + clientRequestMap.get(requestId).fileName().substring(0, clientRequestMap.get(requestId).fileName().lastIndexOf(".")) + ".html";
+            String path = getFolderPath() + "output_files/" + clientRequestsOutputNames.get(requestId) + ".html";
             try {
                 Desktop.getDesktop().open(new File(path));
                 System.out.println("\nFile opened successfully.");
@@ -397,7 +417,7 @@ public class ClientMainClass {
             if(completedRequest.clientId().equals(clientId)){
                 clientRequestsStatusMap.put(completedRequest.requestId(),Status.DONE);
                 String output = downloadFromS3(completedRequest.output());
-                createHtmlFile(output,clientRequestMap.get(completedRequest.requestId()).fileName());
+                createHtmlFile(output,clientRequestsOutputNames.get(completedRequest.requestId()));
                 deleteFromQueue(m,USER_OUTPUT_QUEUE_NAME);
             }
         }
@@ -433,7 +453,7 @@ public class ClientMainClass {
         }
         docBuilder.append(baseHtmlDocParts[3]);
 
-        String pathToWrite = getFolderPath() + "output_files/" + fileName.substring(0, fileName.lastIndexOf(".")) + ".html";
+        String pathToWrite = getFolderPath() + "output_files/" + fileName + ".html";
         File file = new File(pathToWrite);
         file.getParentFile().mkdirs();
         try(BufferedWriter writer = new BufferedWriter(new FileWriter(pathToWrite))){
@@ -443,17 +463,20 @@ public class ClientMainClass {
         }
     }
 
-    private static void sendClientRequest(String fileName, int reviewsPerWorker, boolean terminate) throws IOException {
-        String input = readInputFile(fileName);
-        String pathInS3 = "temp/%s/%s___%s".formatted(clientId, UUID.randomUUID(), fileName);
+    private static void sendClientRequest(String inputFileName, String outputFileName, int reviewsPerWorker, boolean terminate) throws IOException {
+        String input = readInputFile(inputFileName);
+        String pathInS3 = "temp/%s/%s___%s".formatted(clientId, UUID.randomUUID(), inputFileName);
         uploadToS3(pathInS3, input);
         ClientRequest toSend = new ClientRequest(clientId, requestId, pathInS3, reviewsPerWorker, terminate);
-        ClientRequest toSave = new ClientRequest(clientId, requestId, fileName, reviewsPerWorker, terminate);
+        ClientRequest toSave = new ClientRequest(clientId, requestId, inputFileName, reviewsPerWorker, terminate);
         sendToQueue(USER_INPUT_QUEUE_NAME, JsonUtils.serialize(toSend));
         clientRequestMap.put(requestId, toSave);
         clientRequestsStatusMap.put(requestId, Status.IN_PROGRESS);
+        clientRequestsOutputNames.put(requestId,outputFileName);
         requestId++;
     }
+
+
 
 
     // ============================================================================ |
@@ -645,10 +668,13 @@ public class ClientMainClass {
             writer.write("%s %s%n".formatted(timeStamp,message));
         } catch (IOException ignored) {}
 
+
         log(message);
     }
 
-    private static void readArgs(String[] args) {
+    private static Map<String,Object> readArgs(String[] args) {
+
+        List<String> quickStartArgs = new LinkedList<>();
 
         List<String> helpOptions = List.of("-h","-help");
         List<String> debugModeOptions = List.of("-d","-debug");
@@ -665,6 +691,10 @@ public class ClientMainClass {
         for (int i = 0; i < args.length; i++) {
             String arg = args[i].toLowerCase();
             String errorMessage;
+
+            if(!argsList.contains(arg)){
+                quickStartArgs.add(args[i]);
+            }
 
             if (debugModeOptions.contains(arg)) {
                 debugMode = true;
@@ -701,8 +731,25 @@ public class ClientMainClass {
                 printUsageAndExit("");
             }
 
-            System.out.println();
-            printUsageAndExit("Unknown argument: %s\n".formatted(arg));
+        //    System.out.println();
+        //    printUsageAndExit("Unknown argument: %s\n".formatted(arg));
+        }
+
+        Map<String,Object> quickStart = new HashMap<>();
+        quickStart.put("namesList",quickStartArgs);
+        if(!quickStartArgs.isEmpty()){
+            quickStart.put("terminate",quickStartArgs.remove("terminate"));
+            int reviewsPerWorker = 0;
+            try {
+                reviewsPerWorker = Integer.parseInt(quickStartArgs.removeLast());
+                quickStart.put("reviewsPerWorker", reviewsPerWorker);
+            } catch (NumberFormatException e){
+                printUsageAndExit("Expected number for reviews per worker.\n");
+            }
+            if(quickStartArgs.size()%2==1){
+                printUsageAndExit("Uneven number of file name parameters\n");
+            }
+            quickStartFlag = true;
         }
 
         if(uploadLogs && ! debugMode){
@@ -712,7 +759,41 @@ public class ClientMainClass {
         if(uploadLogs && appendLogIntervalInSeconds == 0){
             appendLogIntervalInSeconds = 60;
         }
+        return quickStart;
     }
+
+    private static void quickStart(List<String> quickStart, int reviewsPerWorker, boolean isTerminate) {
+        try {
+            List<String> inputNames = quickStart.subList(0, quickStart.size() / 2);
+            List<String> outputNames = quickStart.subList(quickStart.size() / 2, quickStart.size());
+            Iterator<String> inputs = inputNames.iterator();
+            Iterator<String> outputs = outputNames.iterator();
+            Map<String, String> fileNames = new TreeMap<>();
+            IntStream.range(0, inputNames.size())
+                    .forEach(i -> fileNames.put(inputs.next(), outputs.next()));
+            System.out.println("Received:");
+            for (var entry : fileNames.entrySet()) {
+                System.out.printf("%s -> %s%n", entry.getKey(), entry.getValue());
+            }
+            System.out.printf("Reviews Per Worker: %d%n", reviewsPerWorker);
+            System.out.printf("Terminate: %s%n", isTerminate);
+            System.out.println("Sending requests...");
+            for (var entry : fileNames.entrySet()) {
+                sendClientRequest(entry.getKey(), entry.getValue(), reviewsPerWorker, isTerminate);
+            }
+            startManagerIfNotExists();
+            System.out.println();
+            waitForEnter();
+        }catch (Exception e){
+            handleException(e);
+            System.out.println("Would you like to continue to main menu? (y/n)");
+            String choice = readLine();
+            if(!(choice.equalsIgnoreCase("y") || choice.equalsIgnoreCase("yes"))){
+                System.exit(1);
+            }
+        }
+    }
+
 
     private static String readLine() {
         StringBuilder input = new StringBuilder();
