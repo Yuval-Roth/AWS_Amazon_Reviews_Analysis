@@ -329,6 +329,11 @@ public class ClientMainClass {
     }
 
     private static void showRequests() {
+        if(clientRequestMap.isEmpty()){
+            System.out.println("\nNo requests to show.");
+            waitForEnter();
+            return;
+        }
         TablePrinter table = new TablePrinter("Request id","File name","Status");
         for (Map.Entry<Integer, ClientRequest> entry : clientRequestMap.entrySet()) {
             table.addEntry(entry.getKey().toString(),
@@ -444,10 +449,10 @@ public class ClientMainClass {
         uploadToS3(pathInS3, input);
         ClientRequest toSend = new ClientRequest(clientId, requestId, pathInS3, reviewsPerWorker, terminate);
         ClientRequest toSave = new ClientRequest(clientId, requestId, fileName, reviewsPerWorker, terminate);
+        sendToQueue(USER_INPUT_QUEUE_NAME, JsonUtils.serialize(toSend));
         clientRequestMap.put(requestId, toSave);
         clientRequestsStatusMap.put(requestId, Status.IN_PROGRESS);
         requestId++;
-        sendToQueue(USER_INPUT_QUEUE_NAME, JsonUtils.serialize(toSend));
     }
 
 
@@ -527,7 +532,9 @@ public class ClientMainClass {
     private static void sendToQueue(String queueName, String messageBody) {
         SendMessageRequest.Builder builder = SendMessageRequest.builder()
                 .queueUrl(getQueueURL(queueName))
-                .messageBody(messageBody);
+                .messageBody(messageBody)
+                .messageDeduplicationId(clientId+UUID.randomUUID())
+                .messageGroupId("1");
         sqs.sendMessage(builder.build());
     }
 
@@ -628,7 +635,9 @@ public class ClientMainClass {
         if(e instanceof TerminateException){
             System.exit(0);
         }
-
+        if(!debugMode){
+            System.out.println("\nAn error has occurred, check client_log.txt");
+        }
         String timeStamp = getTimeStamp(LocalDateTime.now());
         String message = "Exception occurred\n%s".formatted(stackTraceToString(e));
 
@@ -731,9 +740,6 @@ public class ClientMainClass {
         if(debugMode){
             String timeStamp = getTimeStamp(LocalDateTime.now());
             System.out.printf("%s %s%n",timeStamp,message);
-            try(BufferedWriter writer = new BufferedWriter(new FileWriter(log,true))){
-                writer.write("%s %s%n".formatted(timeStamp,message));
-            } catch (IOException ignored) {}
         }
     }
 
