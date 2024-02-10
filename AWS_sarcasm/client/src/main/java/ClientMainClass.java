@@ -44,7 +44,7 @@ public class ClientMainClass {
     // </EC2>
 
     // <SQS>
-    private static final String USER_INPUT_QUEUE_NAME = "userInputQueue";
+    private static final String USER_INPUT_QUEUE_NAME = "userInputQueue.fifo";
     private static final String USER_OUTPUT_QUEUE_NAME = "userOutputQueue";
     private static final String SQS_DOMAIN_PREFIX = "https://sqs.us-east-1.amazonaws.com/057325794177/";
     private static SqsClient sqs;
@@ -561,9 +561,13 @@ public class ClientMainClass {
 
         if(! queueExists){
             CreateQueueRequest createQueueRequest = CreateQueueRequest.builder()
-                    .queueName(USER_INPUT_QUEUE_NAME)
+                    .queueName(USER_INPUT_QUEUE_NAME).attributes(new HashMap<>(){{
+                        if (USER_INPUT_QUEUE_NAME.endsWith(".fifo")) {
+                            put(QueueAttributeName.FIFO_QUEUE, "true");
+                            put(QueueAttributeName.CONTENT_BASED_DEDUPLICATION, "false");
+                        }
+                    }})
                     .build();
-
             sqs.createQueue(createQueueRequest);
             return true;
         }
