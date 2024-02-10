@@ -377,7 +377,10 @@ public class ClientMainClass {
             System.out.println("\nInvalid request id");
             return;
         }
-
+        if(!clientRequestMap.containsKey(requestId)){
+            System.out.println("\nRequest id not found.");
+            return;
+        }
         if(clientRequestsStatusMap.get(requestId) == Status.DONE){
             String path = getFolderPath() + "output_files/" + clientRequestsOutputNames.get(requestId) + ".html";
             try {
@@ -387,6 +390,9 @@ public class ClientMainClass {
             } catch (IOException e) {
                 handleException(e);
             }
+        }
+        else{
+            System.out.println("\nRequest is still in progress");
         }
     }
 
