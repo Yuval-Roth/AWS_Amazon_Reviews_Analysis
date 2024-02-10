@@ -134,7 +134,6 @@ public class ClientMainClass {
             </html>""";
     private static Map<Integer,ClientRequest> clientRequestMap;
     private static Map<Integer,Status> clientRequestsStatusMap;
-    private static AtomicBoolean newFinishedRequest;
     private static File log;
     // </APPLICATION DATA>
 
@@ -158,7 +157,6 @@ public class ClientMainClass {
         clientId = UUID.randomUUID().toString();
         clientRequestMap = new HashMap<>();
         clientRequestsStatusMap = new HashMap<>();
-        newFinishedRequest = new AtomicBoolean(false);
         log = new File(getFolderPath() + "client_log.txt");
 
         // create folders for input and output files
@@ -206,7 +204,7 @@ public class ClientMainClass {
                 handleException(new TerminateException());
             } catch (Ec2Exception e){
                 String m = e.getMessage();
-                if(m.toLowerCase().contains("not authorized")){
+                if(m.toLowerCase().contains("not authorized") || m.toLowerCase().contains("expired")){
                     System.out.println("Aws credentials were rejected.");
                     System.out.println("Make sure the credentials are up to date");
                     System.out.println("\nExiting...");
@@ -396,7 +394,6 @@ public class ClientMainClass {
                 String output = downloadFromS3(completedRequest.output());
                 createHtmlFile(output,clientRequestMap.get(completedRequest.requestId()).fileName());
                 deleteFromQueue(m,USER_OUTPUT_QUEUE_NAME);
-                newFinishedRequest.set(true);
             }
         }
     }
