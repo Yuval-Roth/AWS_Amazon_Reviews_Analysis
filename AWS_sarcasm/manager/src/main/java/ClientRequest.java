@@ -112,26 +112,6 @@ public final class ClientRequest {
     }
 
     @Override
-    public boolean equals(Object obj) {
-        if (obj == this) return true;
-        if (obj == null || obj.getClass() != this.getClass()) return false;
-        var that = (ClientRequest) obj;
-        return Objects.equals(this.clientId, that.clientId) &&
-                this.requestId == that.requestId &&
-                Objects.equals(this.fileName, that.fileName) &&
-                this.reviewsPerWorker == that.reviewsPerWorker &&
-                this.terminate == that.terminate &&
-                Objects.equals(this.output, that.output) &&
-                Objects.equals(this.numJobs, that.numJobs) &&
-                Objects.equals(this.reviewsCount, that.reviewsCount);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(clientId, requestId, fileName, reviewsPerWorker, terminate, output, numJobs, reviewsCount);
-    }
-
-    @Override
     public String toString() {
         return "ClientRequest[" +
                 "clientId=" + clientId + ", " +
@@ -143,4 +123,16 @@ public final class ClientRequest {
                 "reviewsCount=" + reviewsCount + ']';
     }
 
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        ClientRequest that = (ClientRequest) o;
+        return requestId == that.requestId && Objects.equals(clientId, that.clientId);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(clientId, requestId);
+    }
 }

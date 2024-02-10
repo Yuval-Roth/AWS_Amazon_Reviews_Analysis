@@ -82,8 +82,8 @@ public class ManagerMainClass {
     private static final Region ec2_region = Region.US_EAST_1;
     private static final Region s3_region = Region.US_WEST_2;
     private static int jobIdCounter;
-    private static volatile Map<Integer,ClientRequest> clientRequestIdToClientRequest;
-    private static volatile Map<Integer, Integer> jobIdToClientRequestId;
+    private static volatile Map<Integer,ClientRequest> requestCodeToClientRequest;
+    private static volatile Map<Integer, Integer> jobIdToClientRequestCode;
     private static Semaphore workerCountLock;
     private static volatile long nextClientRequestCheck;
     private static volatile long nextWorkerCountCheck;
@@ -128,8 +128,8 @@ public class ManagerMainClass {
             }
         }
 
-        jobIdToClientRequestId = new HashMap<>();
-        clientRequestIdToClientRequest = new HashMap<>();
+        jobIdToClientRequestCode = new HashMap<>();
+        requestCodeToClientRequest = new HashMap<>();
         jobIdCounter = 0;
         instanceIdCounter = 2;
         workerCountLock = new Semaphore(1);
@@ -249,7 +249,7 @@ public class ManagerMainClass {
 
             // read message and create client request
             ClientRequest clientRequest = JsonUtils.deserialize(message.body(), ClientRequest.class);
-            clientRequestIdToClientRequest.put(clientRequest.requestId(), clientRequest);
+            requestCodeToClientRequest.put(clientRequest.hashCode(), clientRequest);
             String input;
             try{
                 input = downloadFromS3(clientRequest.fileName());
@@ -286,7 +286,7 @@ public class ManagerMainClass {
                     .map(trJson -> {
                         int jobId = jobIdCounter++;
                         _attachedJobs.append(jobId).append(" "); // logging purposes
-                        jobIdToClientRequestId.put(jobId,clientRequest.requestId());
+                        jobIdToClientRequestCode.put(jobId,clientRequest.hashCode());
                         clientRequest.incrementNumJobs();
                         return JsonUtils.serialize(new Job(jobId, Job.Action.PROCESS, trJson));
                     })
@@ -314,7 +314,7 @@ public class ManagerMainClass {
             executeLater(()->deleteBatchFromQueue(WORKER_OUT_QUEUE_NAME, finalR.messages()),exceptionHandler);
         }
 
-        if(shouldTerminate.get() && clientRequestIdToClientRequest.isEmpty()){
+        if(shouldTerminate.get() && requestCodeToClientRequest.isEmpty()){
             log("Terminating");
             throw new TerminateException();
         }
@@ -327,7 +327,7 @@ public class ManagerMainClass {
             Job job = JsonUtils.deserialize(message.body(), Job.class);
 
             // check if job was duplicated and already handled
-            if (jobIdToClientRequestId.containsKey(job.jobId())) {
+            if (jobIdToClientRequestCode.containsKey(job.jobId())) {
 
                 // job was not duplicated, handle normally
 
@@ -336,8 +336,8 @@ public class ManagerMainClass {
                 }
 
                 // get client request
-                int clientRequestId = jobIdToClientRequestId.get(job.jobId());
-                ClientRequest clientRequest = clientRequestIdToClientRequest.get(clientRequestId);
+                int requestCode = jobIdToClientRequestCode.get(job.jobId());
+                ClientRequest clientRequest = requestCodeToClientRequest.get(requestCode);
 
                 // add job output to client request and decrement the number of jobs left
                 // in the client request
@@ -347,7 +347,7 @@ public class ManagerMainClass {
 
                 log("Received completed job: %s (from client %s request %s)".formatted(job.jobId(), clientRequest.clientId(), clientRequest.requestId()));
 
-                jobIdToClientRequestId.remove(job.jobId()); // remove job id from map
+                jobIdToClientRequestCode.remove(job.jobId()); // remove job id from map
 
                 // check if client request is done
                 if (clientRequest.isDone()) {
@@ -362,7 +362,7 @@ public class ManagerMainClass {
                     sendToQueue(USER_OUTPUT_QUEUE_NAME, JsonUtils.serialize(completedReq));
 
                     // mark client request as done
-                    clientRequestIdToClientRequest.remove(clientRequestId);
+                    requestCodeToClientRequest.remove(clientRequest.hashCode());
 
                     // decrement required workers
                     addToAtomicInteger(-clientRequest.requiredWorkers());
@@ -382,7 +382,7 @@ public class ManagerMainClass {
         if(noEc2) return;
 
         int runningWorkersCount = getWorkerCount(InstanceStateName.RUNNING, InstanceStateName.PENDING);
-        int requiredInstanceCount = (int)min(requiredWorkers.get(),(int)Math.ceil(jobIdToClientRequestId.size() / 2.0),MAX_WORKERS);
+        int requiredInstanceCount = (int)min(requiredWorkers.get(),(int)Math.ceil(jobIdToClientRequestCode.size() / 2.0),MAX_WORKERS);
         int delta = Math.abs(runningWorkersCount - requiredInstanceCount);
 
         // if the number of running workers is greater than the required number, stop workers
