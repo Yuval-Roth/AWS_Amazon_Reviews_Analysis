@@ -27,6 +27,7 @@ public class ClientMainClass {
                 case IN_PROGRESS -> "In progress";
             };
         }
+
     }
 
     // <S3>
@@ -89,9 +90,10 @@ public class ClientMainClass {
     private static boolean noManager;
     // </DEBUG FLAGS>
 
-    // <APPLICATION DATA>
-    private static String clientId;
-    private static int requestId;
+    // <CONSTANTS>
+    private static final String OUTPUT_FILES_PATH = getFolderPath() + "output_files/";
+    private static final String INPUT_FILES_PATH = getFolderPath() + "input_files/";
+    private static final String CREDENTIALS_PATH = getFolderPath() + "credentials.txt";
     private static final String BASE_HTML_ROW = """
             <tr >
                 <td style="background-color: %s; width: 50px; height: 100px"></td>
@@ -141,6 +143,11 @@ public class ClientMainClass {
             </table>
             </body>
             </html>""";
+    // </CONSTANTS>
+
+    // <APPLICATION DATA>
+    private static String clientId;
+    private static int requestId;
     private static Map<Integer,ClientRequest> clientRequestMap;
     private static Map<Integer,Status> clientRequestsStatusMap;
     private static Map<Integer,String> clientRequestsOutputNames;
@@ -150,20 +157,23 @@ public class ClientMainClass {
 
     public static void main(String[] args) {
 
+        // create folders for input and output files
+        File inputFolder = new File(INPUT_FILES_PATH);
+        File outputFolder = new File(OUTPUT_FILES_PATH);
+        inputFolder.mkdirs();
+        outputFolder.mkdirs();
 
         Box<AwsSessionCredentials> awsCreds = new Box<>(null);
 
         try {
-            AwsCredentialsReader credReader = new AwsCredentialsReader();
+            AwsCredentialsReader credReader = new AwsCredentialsReader(CREDENTIALS_PATH);
             awsCreds.set(credReader.getCredentials());
         } catch (AwsCredentialsReader.CredentialsReaderException e) {
             System.out.println(e.getMessage());
             System.exit(0);
         }
 
-
         Map<String,Object> quickStart = readArgs(args);
-
 
         requestId = 0;
         clientId = UUID.randomUUID().toString();
@@ -171,12 +181,6 @@ public class ClientMainClass {
         clientRequestsStatusMap = new HashMap<>();
         clientRequestsOutputNames = new HashMap<>();
         log = new File(getFolderPath() + "client_log.txt");
-
-        // create folders for input and output files
-        File inputFolder = new File(getFolderPath() + "input_files");
-        File outputFolder = new File(getFolderPath() + "output_files");
-        inputFolder.mkdirs();
-        outputFolder.mkdirs();
 
         sqs = SqsClient.builder()
                 .region(ec2_region)
@@ -237,6 +241,7 @@ public class ClientMainClass {
                     (Integer) quickStart.get("reviewsPerWorker"),
                     (Boolean) quickStart.get("terminate"));
         }
+
         while(true) {
 
             Thread secondaryThread = new Thread(()->secondaryLoop(exceptionHandler) ,"secondary");
@@ -382,7 +387,7 @@ public class ClientMainClass {
             return;
         }
         if(clientRequestsStatusMap.get(requestId) == Status.DONE){
-            String path = getFolderPath() + "output_files/" + clientRequestsOutputNames.get(requestId) + ".html";
+            String path = getFolderPath() + "output_files/" + clientRequestsOutputNames.get(requestId);
             try {
                 Desktop.getDesktop().open(new File(path));
                 System.out.println("\nFile opened successfully.");
@@ -459,9 +464,7 @@ public class ClientMainClass {
         }
         docBuilder.append(baseHtmlDocParts[3]);
 
-        String pathToWrite = getFolderPath() + "output_files/" + fileName + ".html";
-        File file = new File(pathToWrite);
-        file.getParentFile().mkdirs();
+        String pathToWrite = OUTPUT_FILES_PATH + fileName;
         try(BufferedWriter writer = new BufferedWriter(new FileWriter(pathToWrite))){
             writer.write(docBuilder.toString());
         } catch (IOException e) {
@@ -478,7 +481,7 @@ public class ClientMainClass {
         sendToQueue(USER_INPUT_QUEUE_NAME, JsonUtils.serialize(toSend));
         clientRequestMap.put(requestId, toSave);
         clientRequestsStatusMap.put(requestId, Status.IN_PROGRESS);
-        clientRequestsOutputNames.put(requestId,outputFileName);
+        clientRequestsOutputNames.put(requestId,outputFileName.substring(0,outputFileName.lastIndexOf("."))+".html");
         requestId++;
     }
 
@@ -624,7 +627,7 @@ public class ClientMainClass {
     // ========================  UTILITY FUNCTIONS  =============================== |
     // ============================================================================ |
     public static String readInputFile(String fileName) throws IOException {
-        String path = getFolderPath()+"input_files/"+fileName;
+        String path = INPUT_FILES_PATH + fileName;
         StringBuilder stringBuilder = new StringBuilder();
         String line;
         try(BufferedReader buffReader =  new BufferedReader(new FileReader(path))){

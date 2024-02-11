@@ -8,16 +8,12 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class AwsCredentialsReader {
-
-    private static final String fileName = "credentials.txt";
-
     private final Map<String,String> credentialsMap;
 
-    public AwsCredentialsReader() throws CredentialsReaderException {
+    public AwsCredentialsReader(String pathToCredentials) throws CredentialsReaderException {
         try {
             credentialsMap = new HashMap<>();
-
-            String pathToFile = getFolderPath() + fileName;
+            String pathToFile = getFolderPath() + pathToCredentials;
             try (BufferedReader varsFile = new BufferedReader(new FileReader(pathToFile))) {
                 String line;
                 while ((line = varsFile.readLine()) != null){
