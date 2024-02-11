@@ -157,6 +157,8 @@ public class ClientMainClass {
 
     public static void main(String[] args) {
 
+        Map<String,Object> quickStart = readArgs(args);
+
         // create folders for input and output files
         File inputFolder = new File(INPUT_FILES_PATH);
         File outputFolder = new File(OUTPUT_FILES_PATH);
@@ -169,11 +171,10 @@ public class ClientMainClass {
             AwsCredentialsReader credReader = new AwsCredentialsReader(CREDENTIALS_PATH);
             awsCreds.set(credReader.getCredentials());
         } catch (AwsCredentialsReader.CredentialsReaderException e) {
+            log("path to credentials: "+CREDENTIALS_PATH);
             System.out.println(e.getMessage());
             System.exit(0);
         }
-
-        Map<String,Object> quickStart = readArgs(args);
 
         requestId = 0;
         clientId = UUID.randomUUID().toString();
@@ -481,7 +482,15 @@ public class ClientMainClass {
         sendToQueue(USER_INPUT_QUEUE_NAME, JsonUtils.serialize(toSend));
         clientRequestMap.put(requestId, toSave);
         clientRequestsStatusMap.put(requestId, Status.IN_PROGRESS);
-        clientRequestsOutputNames.put(requestId,outputFileName.substring(0,outputFileName.lastIndexOf("."))+".html");
+        if(! outputFileName.endsWith(".html")){
+            if(outputFileName.contains(".")){
+                outputFileName = outputFileName.substring(0, outputFileName.lastIndexOf(".")) + ".html";
+            }
+            else{
+                outputFileName += ".html";
+            }
+        }
+        clientRequestsOutputNames.put(requestId, outputFileName);
         requestId++;
     }
 

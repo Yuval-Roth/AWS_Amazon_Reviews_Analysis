@@ -13,8 +13,7 @@ public class AwsCredentialsReader {
     public AwsCredentialsReader(String pathToCredentials) throws CredentialsReaderException {
         try {
             credentialsMap = new HashMap<>();
-            String pathToFile = getFolderPath() + pathToCredentials;
-            try (BufferedReader varsFile = new BufferedReader(new FileReader(pathToFile))) {
+            try (BufferedReader varsFile = new BufferedReader(new FileReader(pathToCredentials))) {
                 String line;
                 while ((line = varsFile.readLine()) != null){
                     if(line.contains("=")){
@@ -39,16 +38,6 @@ public class AwsCredentialsReader {
             }
             throw new RuntimeException(e);
         }
-    }
-
-    private String getFolderPath() {
-        String folderPath = AwsCredentialsReader.class.getResource("AwsCredentialsReader.class").getPath();
-        folderPath = folderPath.replace("%20"," "); //fix space character
-        folderPath = folderPath.substring(folderPath.indexOf("/")+1); // remove initial '/'
-        folderPath = folderPath.substring(0,folderPath.lastIndexOf("/")); // remove .class file from path
-        folderPath = folderPath.substring(0,folderPath.lastIndexOf("/")+1); // exit jar
-        folderPath = folderPath.replace("/","\\");
-        return folderPath;
     }
 
     public AwsSessionCredentials getCredentials() throws CredentialsReaderException {
