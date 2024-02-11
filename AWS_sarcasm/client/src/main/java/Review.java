@@ -1,5 +1,4 @@
 import java.util.Map;
-import java.util.Objects;
 
 public record Review(String id, String link, String title, String text, int rating, String author, String date,
                      Review.Sentiment sentiment, Map<String, String> entities) {
