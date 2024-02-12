@@ -823,7 +823,6 @@ public class ClientMainClass {
             }
             System.out.printf("Reviews Per Worker: %d%n", reviewsPerWorker);
             System.out.printf("Terminate: %s%n", isTerminate);
-            System.out.println("Sending requests...");
             for (var entry : fileNames.entrySet()) {
                 sendClientRequest(entry.getKey(), entry.getValue(), reviewsPerWorker, isTerminate);
             }
