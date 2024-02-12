@@ -250,6 +250,15 @@ public class ManagerMainClass {
             requestCodeToClientRequest.put(clientRequest.hashCode(), clientRequest);
             String input;
             try{
+                long sizeOfInput = s3.headObject(HeadObjectRequest.builder()
+                        .bucket(BUCKET_NAME)
+                        .key("files/"+clientRequest.fileName()).build()).contentLength();
+                long freeMemory = Runtime.getRuntime().freeMemory();
+                int _25MB = 25 * 1024;
+                if(freeMemory - sizeOfInput < _25MB){
+                    returnMessageToQueue(USER_INPUT_QUEUE_NAME, message);
+                    return;
+                }
                 input = downloadFromS3(clientRequest.fileName());
             } catch(NoSuchKeyException e){
                 log("received client request: %s".formatted(clientRequest));
@@ -403,10 +412,10 @@ public class ManagerMainClass {
         workerCountLock.release();
     }
 
+
     // ============================================================================ |
     // ========================  AWS API FUNCTIONS  =============================== |
     // ============================================================================ |
-
     private static void createQueuesIfNotExists() {
 
         boolean queuesCreated = false;
@@ -461,12 +470,13 @@ public class ManagerMainClass {
                 .bucket(BUCKET_NAME)
                 .key("files/"+key).build());
 
+
+
+
         // get file from response
         byte[] file = {};
         try {
-            int size = r.available();
             file = r.readAllBytes();
-            System.out.println(size);
         } catch (IOException e) {
             handleException(e);
         }
@@ -480,6 +490,7 @@ public class ManagerMainClass {
                     .key("files/"+key).build(),
                 RequestBody.fromString(content));
     }
+
     private static void appendToS3(String key, String content) {
         String oldContent = "";
         try{
@@ -487,7 +498,6 @@ public class ManagerMainClass {
         } catch (NoSuchKeyException ignored){}
         uploadToS3(key, oldContent + content);
     }
-
 
     private static void stopWorkers(int count) {
         for(int i = 0; i < count; i++){
@@ -618,6 +628,7 @@ public class ManagerMainClass {
         }
         return false;
     }
+
     private static void deleteBatchFromQueue(String queueName, List<Message> messages){
 
         List<List<Message>> batches = splitDeleteMessagesToBatches(messages);
@@ -633,7 +644,6 @@ public class ManagerMainClass {
                     .build());
         }
     }
-
     private static void sendBatchToQueue(String queueName, List<String> messageBodies) {
 
         List<List<String>> batches = splitSendMessagesToBatches(messageBodies);
@@ -696,6 +706,14 @@ public class ManagerMainClass {
         }
 
         return batches;
+    }
+
+    private static void returnMessageToQueue(String queueName, Message message) {
+        sqs.changeMessageVisibility(software.amazon.awssdk.services.sqs.model.ChangeMessageVisibilityRequest.builder()
+                .queueUrl(queueName)
+                .receiptHandle(message.receiptHandle())
+                .visibilityTimeout(0)
+                .build());
     }
 
     private static void sendToQueue(String queueName, String messageBody) {
