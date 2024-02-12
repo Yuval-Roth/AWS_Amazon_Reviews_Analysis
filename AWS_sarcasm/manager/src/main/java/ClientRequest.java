@@ -5,15 +5,13 @@ import java.util.Objects;
 public final class ClientRequest {
     private final String clientId;
     private final int requestId;
-
     private final int part;
-
     private final String fileName;
     private final int reviewsPerWorker;
     private final boolean terminate;
-    private  List<TitleReviews> output;
-    private  int numJobs;
-    private  int reviewsCount;
+    private List<TitleReviews> output;
+    private int numJobs;
+    private int reviewsCount;
 
     public ClientRequest() {
         this.clientId = null;
@@ -124,6 +122,7 @@ public final class ClientRequest {
         return "ClientRequest[" +
                 "clientId=" + clientId + ", " +
                 "requestId=" + requestId + ", " +
+                "part=" + part + ", " +
                 "fileName=" + fileName + ", " +
                 "reviewsPerWorker=" + reviewsPerWorker + ", " +
                 "terminate=" + terminate + ", " +
@@ -131,16 +130,17 @@ public final class ClientRequest {
                 "reviewsCount=" + reviewsCount + ']';
     }
 
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         ClientRequest that = (ClientRequest) o;
-        return requestId == that.requestId && Objects.equals(clientId, that.clientId);
+        return requestId == that.requestId && part == that.part && Objects.equals(clientId, that.clientId);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(clientId, requestId);
+        return Objects.hash(clientId, requestId, part);
     }
 }
