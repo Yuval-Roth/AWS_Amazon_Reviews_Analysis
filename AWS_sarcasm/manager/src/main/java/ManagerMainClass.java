@@ -256,7 +256,7 @@ public class ManagerMainClass {
             } catch(NoSuchKeyException e){
                 log("received client request: %s".formatted(clientRequest));
                 log("File not found: %s".formatted(clientRequest.fileName()));
-                CompletedClientRequest fileNotFound = new CompletedClientRequest(clientRequest.clientId(), clientRequest.requestId(), "File not found");
+                CompletedClientRequest fileNotFound = new CompletedClientRequest(clientRequest.clientId(), clientRequest.requestId(),clientRequest.part(), "File not found");
                 executeLater(()->sendToQueue(USER_OUTPUT_QUEUE_NAME, JsonUtils.serialize(fileNotFound)),exceptionHandler);
                 continue;
             }

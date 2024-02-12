@@ -5,6 +5,9 @@ import java.util.Objects;
 public final class ClientRequest {
     private final String clientId;
     private final int requestId;
+
+    private final int part;
+
     private final String fileName;
     private final int reviewsPerWorker;
     private final boolean terminate;
@@ -12,10 +15,10 @@ public final class ClientRequest {
     private  int numJobs;
     private  int reviewsCount;
 
-
     public ClientRequest() {
         this.clientId = null;
         this.requestId = 0;
+        this.part = 0;
         this.fileName = null;
         this.reviewsPerWorker = 0;
         this.terminate = false;
@@ -24,9 +27,10 @@ public final class ClientRequest {
         this.reviewsCount = 0;
     }
 
-    public ClientRequest(String clientId, int requestId, String fileName, int reviewsPerWorker, boolean terminate) {
+    public ClientRequest(String clientId, int requestId, int part, String fileName, int reviewsPerWorker, boolean terminate) {
         this.clientId = clientId;
         this.requestId = requestId;
+        this.part = part;
         this.fileName = fileName;
         this.reviewsPerWorker = reviewsPerWorker;
         this.terminate = terminate;
@@ -76,7 +80,7 @@ public final class ClientRequest {
     }
 
     public CompletedClientRequest getCompletedRequest(String fileName) {
-        return new CompletedClientRequest(clientId, requestId, fileName);
+        return new CompletedClientRequest(clientId, requestId, part,fileName);
     }
 
     public String clientId() {
@@ -85,6 +89,10 @@ public final class ClientRequest {
 
     public int requestId() {
         return requestId;
+    }
+
+    public int part() {
+        return part;
     }
 
     public String fileName() {
