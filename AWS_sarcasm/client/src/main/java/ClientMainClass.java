@@ -95,16 +95,16 @@ public class ClientMainClass {
     private static final String INPUT_FILES_PATH = getFolderPath() + "input_files/";
     private static final String CREDENTIALS_PATH = getFolderPath() + "credentials.txt";
     private static final String BASE_HTML_ROW = """
-            <tr >
-                <td style="background-color: %s; width: 50px; height: 100px"></td>
-                <td>
-                    <ul style="line-height: 25px; padding-top: 0; padding-bottom: 0">
-                        <li style="padding-bottom: 5px; padding-top: 5px">Subject: %s</li>
-                        <li style="padding-bottom: 5px; padding-top: 5px"><a href="%s">%s</a></li>
-                        <li style="padding-bottom: 5px; padding-top: 5px">Entities: %s</li>
-                        <li style="padding-bottom: 5px; padding-top: 5px">Sarcasm: %s</li>
-                    </ul>
-                </td>
+            <tr>
+            <td style="background-color: %s; width: 50px; height: 100px"></td>
+            <td>
+            <ul style="line-height: 25px; padding-top: 0; padding-bottom: 0">
+            <li style="padding-bottom: 5px; padding-top: 5px">Subject: %s</li>
+            <li style="padding-bottom: 5px; padding-top: 5px"><a href="%s">%s</a></li>
+            <li style="padding-bottom: 5px; padding-top: 5px">Entities: %s</li>
+            <li style="padding-bottom: 5px; padding-top: 5px">Sarcasm: %s</li>
+            </ul>
+            </td>
             </tr>""";
 
     private static final String BASE_HTML_DOC = """
@@ -152,7 +152,9 @@ public class ClientMainClass {
     private static File log;
     private static boolean quickStartFlag;
 
-    private static final int MAX_SPLIT_SIZE = 25 * 1024 * 1024;
+//    private static final int MAX_SPLIT_SIZE = 25 * 1024 * 1024;
+
+    private static final int MAX_SPLIT_SIZE = 4500;
     // </APPLICATION DATA>
 
     public static void main(String[] args) {
@@ -429,8 +431,8 @@ public class ClientMainClass {
 
                 String output = downloadFromS3(completedRequest.output());
                 ClientRequest clientRequest = clientRequestMap.get(completedRequest.requestId());
-                String outputFileName = clientRequest.outputFileName();
-                appendToFile(OUTPUT_FILES_PATH+ outputFileName, output);
+                String partsFileName = clientRequest.outputFileName()+".parts";
+                appendToFile(OUTPUT_FILES_PATH+ partsFileName, output);
                 clientRequest.decrementPartsCount();
                 deleteFromQueue(m,USER_OUTPUT_QUEUE_NAME);
 
@@ -444,15 +446,22 @@ public class ClientMainClass {
     private static void createHtmlFile(String outputFileName,String inputFileName) {
 
         String flattenedBaseRow = BASE_HTML_ROW.replaceAll("\n","");
+        String flattenedBaseDoc = BASE_HTML_DOC.replaceAll("\n","");
         String[] baseRowParts = flattenedBaseRow.split("%s");
+        String[] baseHtmlDocParts = flattenedBaseDoc.split("%s");
         String line;
 
-        File tempFile = new File(OUTPUT_FILES_PATH + outputFileName+".temp");
+        File partsFile = new File(OUTPUT_FILES_PATH + outputFileName+".parts");
         File outputFile = new File(OUTPUT_FILES_PATH + outputFileName);
 
-        try (BufferedReader reader = new BufferedReader(new FileReader(outputFile));
-             BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile,true))){
+        // delete the output file if it exists
+        outputFile.delete();
 
+        try (BufferedReader reader = new BufferedReader(new FileReader(partsFile));
+             BufferedWriter writer = new BufferedWriter(new FileWriter(outputFile,true))){
+
+            writer.write(baseHtmlDocParts[0] + inputFileName + baseHtmlDocParts[1] + inputFileName + baseHtmlDocParts[2]);
+            writer.newLine();
             while((line = reader.readLine()) != null) {
                 TitleReviews tr = JsonUtils.deserialize(line,TitleReviews.class);
                 for(Review r: tr.reviews()){
@@ -462,39 +471,20 @@ public class ClientMainClass {
                             r.link() + baseRowParts[4] +
                             r.entitiesToString() + baseRowParts[5] +
                             isSarcasm(r.sentiment(),r.rating()) + baseRowParts[6];
-                    writer.write(row+'\n');
+                    writer.write(row);
+                    writer.newLine();
                 }
-            }
-        } catch(IOException e) {
-            throw new RuntimeException(e);
-        }
-
-        String flattenedBaseDoc = BASE_HTML_DOC.replaceAll("\n","");
-        String[] baseHtmlDocParts = flattenedBaseDoc.split("%s");
-
-
-        // delete the file
-        outputFile.delete();
-
-        try (BufferedReader reader = new BufferedReader(new FileReader(tempFile));
-             BufferedWriter writer = new BufferedWriter(new FileWriter(outputFile,true))){
-            writer.write(baseHtmlDocParts[0] + inputFileName + baseHtmlDocParts[1] + inputFileName + baseHtmlDocParts[2]);
-            while((line = reader.readLine()) != null) {
-                writer.write(line+'\n');
             }
             writer.write(baseHtmlDocParts[3]);
         } catch(IOException e) {
             throw new RuntimeException(e);
         }
-
-        tempFile.delete();
+        partsFile.delete();
     }
 
     private static void sendClientRequest(String inputFileName, String outputFileName, int reviewsPerWorker, boolean terminate) throws IOException {
         String path = INPUT_FILES_PATH + inputFileName;
         UUID uploadName = UUID.randomUUID();
-
-        // add request to map
 
         // set .html extension to output file name
         if(! outputFileName.endsWith(".html")){
@@ -505,11 +495,14 @@ public class ClientMainClass {
                 outputFileName += ".html";
             }
         }
+
+        // save request to map
         ClientRequest toSave = new ClientRequest(requestId, inputFileName,outputFileName,new Box<>(0),new Box<>(Status.IN_PROGRESS));
         clientRequestMap.put(requestId, toSave);
 
         BufferedReader buffReader = new BufferedReader(new FileReader(path));
         Box<String> carry = new Box<>(null);
+        System.out.println("Sending request...");
         do {
             String input = readInputFile(buffReader, carry);
             int partNum = toSave.partsCount().get() + 1;
@@ -668,10 +661,11 @@ public class ClientMainClass {
         StringBuilder stringBuilder = new StringBuilder();
         String line;
         if(carry.get()!=null){
-            stringBuilder.append(carry.get());
+            stringBuilder.append(carry.get()).append("\n");
             carry.set(null);
         }
         while((line = buffReader.readLine())!=null) {
+            if(line.isBlank()) continue;
             if(stringBuilder.length() + line.length() + 1 > MAX_SPLIT_SIZE) {
                 carry.set(line);
                 break;

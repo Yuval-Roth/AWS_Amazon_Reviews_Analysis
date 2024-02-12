@@ -5,15 +5,13 @@ import java.util.Objects;
 public final class ClientRequest {
     private final String clientId;
     private final int requestId;
-
     private final int part;
-
     private final String fileName;
     private final int reviewsPerWorker;
     private final boolean terminate;
-    private  List<TitleReviews> output;
-    private  int numJobs;
-    private  int reviewsCount;
+    private List<TitleReviews> output;
+    private int numJobs;
+    private int reviewsCount;
 
     public ClientRequest() {
         this.clientId = null;
