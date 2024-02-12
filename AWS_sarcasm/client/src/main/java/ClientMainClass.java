@@ -149,10 +149,10 @@ public class ClientMainClass {
     private static String clientId;
     private static int requestId;
     private static Map<Integer,ClientRequest> clientRequestMap;
-    private static Map<Integer,Status> clientRequestsStatusMap;
-    private static Map<Integer,String> clientRequestsOutputNames;
     private static File log;
     private static boolean quickStartFlag;
+
+    private static final int MAX_SPLIT_SIZE = 25 * 1024 * 1024;
     // </APPLICATION DATA>
 
     public static void main(String[] args) {
@@ -179,8 +179,6 @@ public class ClientMainClass {
         requestId = 0;
         clientId = UUID.randomUUID().toString();
         clientRequestMap = new HashMap<>();
-        clientRequestsStatusMap = new HashMap<>();
-        clientRequestsOutputNames = new HashMap<>();
         log = new File(getFolderPath() + "client_log.txt");
 
         sqs = SqsClient.builder()
@@ -276,8 +274,8 @@ public class ClientMainClass {
                     case "2" -> showRequests();
                     case "3" -> openFinishedRequest();
                     case "4" -> {
-                        boolean allDone = clientRequestsStatusMap.values().stream()
-                                .allMatch(s -> s == Status.DONE);
+                        boolean allDone = clientRequestMap.values().stream()
+                                .allMatch(ClientRequest::isDone);
                         if (! allDone) {
                             System.out.println("\nThere are still requests in progress, are you sure you want to exit? (y/n)");
                             String c = readLine().toLowerCase();
@@ -360,11 +358,12 @@ public class ClientMainClass {
             waitForEnter();
             return;
         }
-        TablePrinter table = new TablePrinter("Request id","File name","Status");
-        for (Map.Entry<Integer, ClientRequest> entry : clientRequestMap.entrySet()) {
+        TablePrinter table = new TablePrinter("Request id","Input file name","Output file name","Status");
+        for (var entry : clientRequestMap.entrySet()) {
             table.addEntry(entry.getKey().toString(),
-                    entry.getValue().fileName(),
-                    clientRequestsStatusMap.get(entry.getKey()).toString());
+                    entry.getValue().inputFileName(),
+                    entry.getValue().outputFileName(),
+                    entry.getValue().status().toString());
         }
         System.out.println(table);
         waitForEnter();
@@ -387,8 +386,8 @@ public class ClientMainClass {
             System.out.println("\nRequest id not found.");
             return;
         }
-        if(clientRequestsStatusMap.get(requestId) == Status.DONE){
-            String path = getFolderPath() + "output_files/" + clientRequestsOutputNames.get(requestId);
+        if(clientRequestMap.get(requestId).isDone()){
+            String path = getFolderPath() + "output_files/" + clientRequestMap.get(requestId).outputFileName();
             try {
                 Desktop.getDesktop().open(new File(path));
                 System.out.println("\nFile opened successfully.");
@@ -427,61 +426,77 @@ public class ClientMainClass {
         for(Message m: messages){
             CompletedClientRequest completedRequest = JsonUtils.deserialize(m.body(),CompletedClientRequest.class);
             if(completedRequest.clientId().equals(clientId)){
-                clientRequestsStatusMap.put(completedRequest.requestId(),Status.DONE);
+
                 String output = downloadFromS3(completedRequest.output());
-                createHtmlFile(output,clientRequestsOutputNames.get(completedRequest.requestId()));
+                ClientRequest clientRequest = clientRequestMap.get(completedRequest.requestId());
+                String outputFileName = clientRequest.outputFileName();
+                appendToFile(OUTPUT_FILES_PATH+ outputFileName, output);
+                clientRequest.decrementPartsCount();
                 deleteFromQueue(m,USER_OUTPUT_QUEUE_NAME);
+
+                if (clientRequest.isDone()) {
+                    createHtmlFile(clientRequest.outputFileName(),clientRequest.inputFileName());
+                }
             }
         }
     }
 
-    private static void createHtmlFile(String output, String fileName) {
+    private static void createHtmlFile(String outputFileName,String inputFileName) {
 
-        String[] jsons = output.split("\n");
+        String flattenedBaseRow = BASE_HTML_ROW.replaceAll("\n","");
+        String[] baseRowParts = flattenedBaseRow.split("%s");
+        String line;
 
-        List<TitleReviews> titleReviews = Arrays.stream(jsons)
-                .map(tr -> JsonUtils.<TitleReviews>deserialize(tr, TitleReviews.class))
-                .toList();
+        File tempFile = new File(OUTPUT_FILES_PATH + outputFileName+".temp");
+        File outputFile = new File(OUTPUT_FILES_PATH + outputFileName);
 
-        String[] baseRowParts = BASE_HTML_ROW.split("%s");
+        try (BufferedReader reader = new BufferedReader(new FileReader(outputFile));
+             BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile,true))){
 
-        List<String> rows = new LinkedList<>();
-        for(TitleReviews tr: titleReviews){
-            for(Review r: tr.reviews()){
-                rows.add(baseRowParts[0] + getBackgroundColor(r.sentiment()) + baseRowParts[1] +
-                        tr.title() + baseRowParts[2] +
-                        r.link() + baseRowParts[3] +
-                        r.link() + baseRowParts[4] +
-                        r.entitiesToString() + baseRowParts[5] +
-                        isSarcasm(r.sentiment(),r.rating()) + baseRowParts[6]);
+            while((line = reader.readLine()) != null) {
+                TitleReviews tr = JsonUtils.deserialize(line,TitleReviews.class);
+                for(Review r: tr.reviews()){
+                    String row = baseRowParts[0] + getBackgroundColor(r.sentiment()) + baseRowParts[1] +
+                            tr.title() + baseRowParts[2] +
+                            r.link() + baseRowParts[3] +
+                            r.link() + baseRowParts[4] +
+                            r.entitiesToString() + baseRowParts[5] +
+                            isSarcasm(r.sentiment(),r.rating()) + baseRowParts[6];
+                    writer.write(row+'\n');
+                }
             }
+        } catch(IOException e) {
+            throw new RuntimeException(e);
         }
 
-        String[] baseHtmlDocParts = BASE_HTML_DOC.split("%s");
-        StringBuilder docBuilder = new StringBuilder();
-        docBuilder.append(baseHtmlDocParts[0]).append(fileName).append(baseHtmlDocParts[1]).append(fileName).append(baseHtmlDocParts[2]);
-        for(String row: rows){
-            docBuilder.append(row).append("\n");
-        }
-        docBuilder.append(baseHtmlDocParts[3]);
+        String flattenedBaseDoc = BASE_HTML_DOC.replaceAll("\n","");
+        String[] baseHtmlDocParts = flattenedBaseDoc.split("%s");
 
-        String pathToWrite = OUTPUT_FILES_PATH + fileName;
-        try(BufferedWriter writer = new BufferedWriter(new FileWriter(pathToWrite))){
-            writer.write(docBuilder.toString());
-        } catch (IOException e) {
-            handleException(e);
+
+        // delete the file
+        outputFile.delete();
+
+        try (BufferedReader reader = new BufferedReader(new FileReader(tempFile));
+             BufferedWriter writer = new BufferedWriter(new FileWriter(outputFile,true))){
+            writer.write(baseHtmlDocParts[0] + inputFileName + baseHtmlDocParts[1] + inputFileName + baseHtmlDocParts[2]);
+            while((line = reader.readLine()) != null) {
+                writer.write(line+'\n');
+            }
+            writer.write(baseHtmlDocParts[3]);
+        } catch(IOException e) {
+            throw new RuntimeException(e);
         }
+
+        tempFile.delete();
     }
 
     private static void sendClientRequest(String inputFileName, String outputFileName, int reviewsPerWorker, boolean terminate) throws IOException {
-        String input = readInputFile(inputFileName);
-        String pathInS3 = "temp/%s/%s___%s".formatted(clientId, UUID.randomUUID(), inputFileName);
-        uploadToS3(pathInS3, input);
-        ClientRequest toSend = new ClientRequest(clientId, requestId, pathInS3, reviewsPerWorker, terminate);
-        ClientRequest toSave = new ClientRequest(clientId, requestId, inputFileName, reviewsPerWorker, terminate);
-        sendToQueue(USER_INPUT_QUEUE_NAME, JsonUtils.serialize(toSend));
-        clientRequestMap.put(requestId, toSave);
-        clientRequestsStatusMap.put(requestId, Status.IN_PROGRESS);
+        String path = INPUT_FILES_PATH + inputFileName;
+        UUID uploadName = UUID.randomUUID();
+
+        // add request to map
+
+        // set .html extension to output file name
         if(! outputFileName.endsWith(".html")){
             if(outputFileName.contains(".")){
                 outputFileName = outputFileName.substring(0, outputFileName.lastIndexOf(".")) + ".html";
@@ -490,12 +505,24 @@ public class ClientMainClass {
                 outputFileName += ".html";
             }
         }
-        clientRequestsOutputNames.put(requestId, outputFileName);
+        ClientRequest toSave = new ClientRequest(requestId, inputFileName,outputFileName,new Box<>(0),new Box<>(Status.IN_PROGRESS));
+        clientRequestMap.put(requestId, toSave);
+
+        BufferedReader buffReader = new BufferedReader(new FileReader(path));
+        Box<String> carry = new Box<>(null);
+        do {
+            String input = readInputFile(buffReader, carry);
+            int partNum = toSave.partsCount().get() + 1;
+            String pathInS3 = "temp/%s/%s_part_%d___%s".formatted(clientId, uploadName, partNum, inputFileName);
+            uploadToS3(pathInS3, input);
+            ClientRequestPart toSend = new ClientRequestPart(clientId, requestId, partNum, pathInS3, reviewsPerWorker,
+                    terminate && ! buffReader.ready() && carry.get() == null);
+            sendToQueue(USER_INPUT_QUEUE_NAME, JsonUtils.serialize(toSend));
+            toSave.incrementPartsCount();
+        } while(carry.get() != null || buffReader.ready());
+
         requestId++;
     }
-
-
-
 
     // ============================================================================ |
     // ========================  AWS API FUNCTIONS  =============================== |
@@ -635,14 +662,21 @@ public class ClientMainClass {
     // ============================================================================ |
     // ========================  UTILITY FUNCTIONS  =============================== |
     // ============================================================================ |
-    public static String readInputFile(String fileName) throws IOException {
-        String path = INPUT_FILES_PATH + fileName;
+
+
+    public static String readInputFile(BufferedReader buffReader, Box<String> carry) throws IOException {
         StringBuilder stringBuilder = new StringBuilder();
         String line;
-        try(BufferedReader buffReader =  new BufferedReader(new FileReader(path))){
-            while((line = buffReader.readLine())!=null) {
-                stringBuilder.append(line).append("\n");
+        if(carry.get()!=null){
+            stringBuilder.append(carry.get());
+            carry.set(null);
+        }
+        while((line = buffReader.readLine())!=null) {
+            if(stringBuilder.length() + line.length() + 1 > MAX_SPLIT_SIZE) {
+                carry.set(line);
+                break;
             }
+            stringBuilder.append(line).append("\n");
         }
         return stringBuilder.toString();
     }
@@ -881,5 +915,13 @@ public class ClientMainClass {
             case Positive -> colorToHex(positive);
             case VeryPositive -> colorToHex(veryPositive);
         };
+    }
+
+    private static void appendToFile(String path, String content) {
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(path, true))) {
+            writer.write(content+"\n");
+        } catch (IOException e) {
+            handleException(e);
+        }
     }
 }
