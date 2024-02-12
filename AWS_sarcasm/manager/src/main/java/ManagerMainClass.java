@@ -464,7 +464,9 @@ public class ManagerMainClass {
         // get file from response
         byte[] file = {};
         try {
+            int size = r.available();
             file = r.readAllBytes();
+            System.out.println(size);
         } catch (IOException e) {
             handleException(e);
         }

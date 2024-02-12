@@ -152,9 +152,9 @@ public class ClientMainClass {
     private static File log;
     private static boolean quickStartFlag;
 
-//    private static final int MAX_SPLIT_SIZE = 25 * 1024 * 1024;
+    private static final int MAX_SPLIT_SIZE = 25 * 1024 * 1024;
 
-    private static final int MAX_SPLIT_SIZE = 4500;
+//    private static final int MAX_SPLIT_SIZE = 4500; // for testing
     // </APPLICATION DATA>
 
     public static void main(String[] args) {
