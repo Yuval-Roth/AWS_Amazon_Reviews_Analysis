@@ -189,7 +189,7 @@ public class ManagerMainClass {
             try{
                 if(! shouldTerminate.get() && System.currentTimeMillis() >= nextClientRequestCheck) {
                     checkForClientRequests(exceptionHandler);
-                    nextClientRequestCheck = System.currentTimeMillis() + 3000;
+                    nextClientRequestCheck = System.currentTimeMillis() + 100;
                 }
 
                 if(System.currentTimeMillis() >= nextWorkerCountCheck ) {
@@ -232,15 +232,13 @@ public class ManagerMainClass {
                 .build();
 
         ReceiveMessageResponse r;
-        do{
-            r = sqs.receiveMessage(messageRequest);
+        r = sqs.receiveMessage(messageRequest);
 
-            if(r.hasMessages()){
-                handleClientRequests(r.messages(),exceptionHandler);
-                ReceiveMessageResponse finalR = r;
-                executeLater(()->deleteBatchFromQueue(USER_INPUT_QUEUE_NAME, finalR.messages()),exceptionHandler);
-            }
-        } while(r.hasMessages());
+        if(r.hasMessages()){
+            handleClientRequests(r.messages(),exceptionHandler);
+            ReceiveMessageResponse finalR = r;
+            executeLater(()->deleteBatchFromQueue(USER_INPUT_QUEUE_NAME, finalR.messages()),exceptionHandler);
+        }
     }
 
     private static void handleClientRequests(List<Message> messages, Box<Exception> exceptionHandler){
@@ -345,7 +343,7 @@ public class ManagerMainClass {
                 clientRequest.addTitleReviews(tr);
                 clientRequest.decrementNumJobs();
 
-                log("Received completed job: %s (from client %s request %s)".formatted(job.jobId(), clientRequest.clientId(), clientRequest.requestId()));
+                log("Received completed job: %s (from client %s request %s part %d)".formatted(job.jobId(), clientRequest.clientId(), clientRequest.requestId(), clientRequest.part()));
 
                 jobIdToClientRequestCode.remove(job.jobId()); // remove job id from map
 
@@ -425,7 +423,7 @@ public class ManagerMainClass {
             log("Created queue: %s".formatted(WORKER_MANAGEMENT_QUEUE_NAME));
             queuesCreated = true;
         }
-        if(createQueueIfNotExists(USER_INPUT_QUEUE_NAME)) {
+        if(createQueueIfNotExists(USER_INPUT_QUEUE_NAME, 60)) {
             log("Created queue: %s".formatted(USER_INPUT_QUEUE_NAME));
             queuesCreated = true;
         }
