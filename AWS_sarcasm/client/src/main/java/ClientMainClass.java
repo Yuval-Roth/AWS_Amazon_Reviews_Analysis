@@ -53,25 +53,25 @@ public class ClientMainClass {
 
     // <DEBUG FLAGS>
     private static final String USAGE = """
-                Usage: java -jar clientProgram.jar [optional quick start args] [-h | -help]
+                 Usage: java -jar clientProgram.jar [optional quick start args] [-h | -help]
                                                    [-d] [optional debug flags]
                 
-                -h | -help :- Print this message and exit.
+                 -h | -help :- Print this message and exit.
                                     
-                -d | -debug :- Run in debug mode, logging all operations to standard output.
+                 -d | -debug :- Run in debug mode, logging all operations to standard output.
                    
-                optional quick start args:
+                 optional quick start args:
                 
-                    inFileName1... inFileNameN outFileName1... outFileNameN n [terminate]
+                     inFileName1... inFileNameN outFileName1... outFileNameN n [terminate]
                     
-                    n :- Reviews per worker.
+                     n :- Reviews per worker.
                     
-                    terminate :- send terminate signal.
+                     terminate :- send terminate signal.
                                                                              
-                optional debug flags:
+                 optional debug flags:
                     
-                    -ul | -uploadLog :- Ec2 instances will upload their logs to the S3 bucket.
-                                  Must be used with -debug.
+                     -ul | -uploadLog :- Ec2 instances will upload their logs to the S3 bucket.
+                                   Must be used with -debug.
                                   
                     -ui | -uploadInterval <interval in seconds> :- When combined with -uploadLog, specifies the interval in seconds
                                   between log uploads to the S3 bucket.

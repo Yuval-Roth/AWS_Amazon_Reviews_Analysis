@@ -21,7 +21,8 @@ public class mainWorkerClass {
     // <DEBUG FLAGS>
     private static final String USAGE = """
                 Usage: java -jar managerProgram.jar -workerId <id> -inQueueUrl <url> -outQueueUrl <url>
-                -managerQueueUrl <url> -S3BucketName <name>  [-h | -help] [optional debug flags]
+                        -managerQueueUrl <url> -S3BucketName <name> -timeout <visibility timeout in seconds>
+                         [-h | -help] [optional debug flags]
                                     
                 -h | -help :- Print this message and exit.
                                     
