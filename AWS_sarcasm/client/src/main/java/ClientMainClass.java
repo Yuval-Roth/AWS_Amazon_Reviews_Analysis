@@ -16,6 +16,8 @@ import java.util.List;
 import java.util.*;
 import java.util.stream.IntStream;
 
+import static java.time.ZoneOffset.*;
+
 public class ClientMainClass {
     enum Status {
         DONE,
@@ -250,6 +252,14 @@ public class ClientMainClass {
             }
         }
 
+        log("Client started");
+        log("Client id: %s".formatted(clientId));
+        log("Debug mode: %s".formatted(debugMode));
+        log("Upload logs: %s".formatted(uploadLogs));
+        log("Upload interval: %d".formatted(appendLogIntervalInSeconds));
+        log("No ec2: %s".formatted(noEc2));
+        log("No manager: %s".formatted(noManager));
+
         Box<Exception> exceptionHandler = new Box<>(null);
 
         if(quickStartFlag){
@@ -320,7 +330,7 @@ public class ClientMainClass {
         while(exceptionHandler.get() == null){
             try{
                 checkForFinishedRequests();
-                Thread.sleep(1000);
+                Thread.sleep(100);
             } catch (Exception e){
                 exceptionHandler.set(e);
                 return;
@@ -422,17 +432,16 @@ public class ClientMainClass {
     private static void checkForFinishedRequests(){
         ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
                 .queueUrl(getQueueURL(USER_OUTPUT_QUEUE_NAME))
-                .waitTimeSeconds(1)
+                .messageAttributeNames(MessageSystemAttributeName.SENT_TIMESTAMP.toString())
+                .waitTimeSeconds(5)
                 .build();
 
         ReceiveMessageResponse r;
         try{
-            do{
-                r = sqs.receiveMessage(messageRequest);
-                if(r.hasMessages()){
-                    handleFinishedRequests(r.messages());
-                }
-            } while(r.hasMessages());
+            r = sqs.receiveMessage(messageRequest);
+            if(r.hasMessages()){
+                handleFinishedRequests(r.messages());
+            }
         } catch (QueueDoesNotExistException ignored){
             try {
                 Thread.sleep(10000);
@@ -454,6 +463,14 @@ public class ClientMainClass {
 
                 if (clientRequest.isDone()) {
                     createHtmlFile(clientRequest.outputFileName(),clientRequest.inputFileName());
+                }
+            } else {
+                var attributeValue = m.messageAttributes().get(MessageSystemAttributeName.SENT_TIMESTAMP.toString());
+                long timeSent = Long.parseLong(attributeValue.stringValue());
+                long timeNow = LocalDateTime.now().toEpochSecond(UTC);
+                if(timeNow - timeSent > 60){
+                    deleteFromQueue(m,USER_OUTPUT_QUEUE_NAME);
+                    log("Received a message that was sent %d seconds ago, deleting it".formatted(timeNow - timeSent));
                 }
             }
         }

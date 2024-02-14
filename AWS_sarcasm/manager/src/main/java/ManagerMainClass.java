@@ -10,6 +10,8 @@ import software.amazon.awssdk.services.sqs.model.*;
 
 import java.io.IOException;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
@@ -161,11 +163,14 @@ public class ManagerMainClass {
 
         while(true){
             Thread secondaryThread = new Thread(()-> secondaryLoop(exceptionHandler),"secondary");
+            Thread userInputThread = new Thread(()-> userInputLoop(exceptionHandler),"userInput");
             secondaryThread.start();
+            userInputThread.start();
             mainLoop(exceptionHandler);
 
             try {
                 secondaryThread.join();
+                userInputThread.join();
             } catch (InterruptedException ignored) {}
             if(exceptionHandler.get() != null){
                 handleException(exceptionHandler.get());
@@ -191,12 +196,6 @@ public class ManagerMainClass {
         long nextSleepTime;
         while(exceptionHandler.get() == null){
             try{
-                if(! shouldTerminate.get() && System.currentTimeMillis() >= nextClientRequestCheck) {
-                    if(! checkForClientRequests(exceptionHandler)){
-                        nextClientRequestCheck = System.currentTimeMillis() + 3000;
-                    }
-                }
-
                 if(System.currentTimeMillis() >= nextWorkerCountCheck ) {
                     if(workerCountLock.tryAcquire()){
                         balanceInstanceCount(exceptionHandler);
@@ -226,15 +225,25 @@ public class ManagerMainClass {
         }
     }
 
+    private static void userInputLoop(Box<Exception> exceptionHandler) {
+        while(exceptionHandler.get() == null){
+            try{
+                checkForClientRequests(exceptionHandler);
+            } catch (Exception e){
+                exceptionHandler.set(e);
+                return;
+            }
+        }
+    }
+
     // ============================================================================ |
     // ========================  MAIN FLOW FUNCTIONS  ============================= |
     // ============================================================================ |
 
-    private static boolean checkForClientRequests(Box<Exception> exceptionHandler) {
-
+    private static void checkForClientRequests(Box<Exception> exceptionHandler) {
         ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
                 .queueUrl(getQueueURL(USER_INPUT_QUEUE_NAME))
-                .waitTimeSeconds(1)
+                .waitTimeSeconds(5)
                 .build();
 
         ReceiveMessageResponse r;
@@ -242,11 +251,8 @@ public class ManagerMainClass {
 
         if(r.hasMessages()){
             handleClientRequests(r.messages(),exceptionHandler);
-            ReceiveMessageResponse finalR = r;
-            executeLater(()->deleteBatchFromQueue(USER_INPUT_QUEUE_NAME, finalR.messages()),exceptionHandler);
-            return true;
+            executeLater(()->deleteBatchFromQueue(USER_INPUT_QUEUE_NAME, r.messages()),exceptionHandler);
         }
-        return false;
     }
 
     private static void handleClientRequests(List<Message> messages, Box<Exception> exceptionHandler){
@@ -318,7 +324,7 @@ public class ManagerMainClass {
 
         ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
                 .queueUrl(getQueueURL(WORKER_OUT_QUEUE_NAME))
-                .waitTimeSeconds(20)
+                .waitTimeSeconds(5)
                 .build();
 
         ReceiveMessageResponse r = sqs.receiveMessage(messageRequest);
@@ -731,6 +737,12 @@ public class ManagerMainClass {
     private static void sendToQueue(String queueName, String messageBody, String messageGroupId) {
         SendMessageRequest.Builder builder = SendMessageRequest.builder()
                 .queueUrl(getQueueURL(queueName))
+                .messageAttributes(new HashMap<>(){{
+                    put(MessageSystemAttributeName.SENT_TIMESTAMP.toString(), MessageAttributeValue.builder()
+                            .dataType("Number")
+                            .stringValue(String.valueOf(LocalDateTime.now().toEpochSecond(ZoneOffset.UTC)))
+                            .build());
+                }})
                 .messageBody(messageBody);
 
         if(messageGroupId != null){
