@@ -42,7 +42,7 @@
     "git-widget-placeholder": "main",
     "ignore.virus.scanning.warn.message": "true",
     "kotlin-language-version-configured": "true",
-    "last_opened_file_path": "C:/Users/Yuval/git/Distributed_Systems_Assignment1/AWS_sarcasm/manager",
+    "last_opened_file_path": "C:/Users/Yuval/git/Distributed_Systems_Assignment1/Environment_variables_setter",
     "node.js.detected.package.eslint": "true",
     "node.js.detected.package.tslint": "true",
     "node.js.selected.package.eslint": "(autodetect)",
@@ -102,11 +102,18 @@
       <workItem from="1707908971602" duration="1239000" />
       <workItem from="1707932386956" duration="70000" />
       <workItem from="1707932790932" duration="16000" />
+      <workItem from="1707953370491" duration="384000" />
     </task>
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
     <option name="version" value="3" />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <ignored-roots>
+      <path value="$PROJECT_DIR$/.." />
+      <path value="$PROJECT_DIR$" />
+    </ignored-roots>
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
