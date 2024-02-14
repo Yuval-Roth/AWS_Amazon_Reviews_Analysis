@@ -77,12 +77,27 @@ public class ClientMainClass {
                                   between log uploads to the S3 bucket.
                                   Must be a positive integer, must be used with -uploadLog.
                                   If this argument is not specified, defaults to 60 seconds.
+                                  Minimum interval is 10 seconds.
                                   
                     -noEc2 :- Run without creating worker instances. Useful for debugging locally.
                     
                     -noManager :- Run without creating manager instance. Useful for debugging locally.
                                   All other debug flags are ignored when this flag is used.
-                """;
+                
+                credentials for aws:
+                    
+                    The credentials file must be in the same directory as the jar file,
+                    should be named 'credentials.txt' and contain the following:
+                            aws_access_key_id = <your access key>
+                            aws_secret_access_key = <your secret key>
+                            aws_session_token = <your session token>
+                    
+                input / output files:
+                
+                    input files should be placed in the 'input_files' directory,
+                    output files will be placed in the 'output_files' directory.
+                    both directories will be automatically created in the same directory as the jar file
+                    upon running the program for the first time (or when running with -h | -help)""";
     private static volatile boolean debugMode;
     private static volatile boolean noEc2;
     private static volatile boolean uploadLogs;
@@ -339,6 +354,7 @@ public class ClientMainClass {
             System.out.println("\nInvalid terminate value");
             return;
         }
+        System.out.println("Sending request...");
         try {
             sendClientRequest(inputFileName,outputFileName,reviewsPerWorker,terminate);
         } catch (IOException e) {
@@ -502,7 +518,6 @@ public class ClientMainClass {
 
         BufferedReader buffReader = new BufferedReader(new FileReader(path));
         Box<String> carry = new Box<>(null);
-        System.out.println("Sending request...");
         do {
             String input = readInputFile(buffReader, carry);
             int partNum = toSave.partsCount().get() + 1;
@@ -802,6 +817,10 @@ public class ClientMainClass {
             printUsageAndExit("Upload logs flag was provided but not debug mode flag\n");
         }
 
+        if(uploadLogs && appendLogIntervalInSeconds < 10){
+            printUsageAndExit("Minimum interval for log uploads is 10 seconds\n");
+        }
+
         if(uploadLogs && appendLogIntervalInSeconds == 0){
             appendLogIntervalInSeconds = 60;
         }
@@ -823,6 +842,7 @@ public class ClientMainClass {
             }
             System.out.printf("Reviews Per Worker: %d%n", reviewsPerWorker);
             System.out.printf("Terminate: %s%n", isTerminate);
+            System.out.println("Sending request...");
             for (var iterator = fileNames.entrySet().iterator(); iterator.hasNext(); ) {
                 var entry = iterator.next();
                 sendClientRequest(entry.getKey(), entry.getValue(), reviewsPerWorker,
