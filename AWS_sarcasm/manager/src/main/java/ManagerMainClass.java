@@ -188,12 +188,13 @@ public class ManagerMainClass {
 
     private static void secondaryLoop(Box<Exception> exceptionHandler) {
 
-        long nextWakeup;
+        long nextSleepTime;
         while(exceptionHandler.get() == null){
             try{
                 if(! shouldTerminate.get() && System.currentTimeMillis() >= nextClientRequestCheck) {
-                    checkForClientRequests(exceptionHandler);
-                    nextClientRequestCheck = System.currentTimeMillis() + 100;
+                    if(! checkForClientRequests(exceptionHandler)){
+                        nextClientRequestCheck = System.currentTimeMillis() + 3000;
+                    }
                 }
 
                 if(System.currentTimeMillis() >= nextWorkerCountCheck ) {
@@ -211,10 +212,11 @@ public class ManagerMainClass {
                     nextLogUpload = System.currentTimeMillis() + (appendLogIntervalInSeconds * 1000L);
                 }
 
-                nextWakeup = min(nextClientRequestCheck, nextWorkerCountCheck, nextLogUpload);
+                nextSleepTime = min(nextClientRequestCheck, nextWorkerCountCheck, nextLogUpload) - System.currentTimeMillis();
+                if(nextSleepTime <= 0) continue;
 
                 try {
-                    Thread.sleep(Math.max(0,nextWakeup - System.currentTimeMillis()));
+                    Thread.sleep(nextSleepTime);
                 } catch (InterruptedException ignored) {}
 
             } catch (Exception e){
@@ -228,7 +230,7 @@ public class ManagerMainClass {
     // ========================  MAIN FLOW FUNCTIONS  ============================= |
     // ============================================================================ |
 
-    private static void checkForClientRequests(Box<Exception> exceptionHandler) {
+    private static boolean checkForClientRequests(Box<Exception> exceptionHandler) {
 
         ReceiveMessageRequest messageRequest = ReceiveMessageRequest.builder()
                 .queueUrl(getQueueURL(USER_INPUT_QUEUE_NAME))
@@ -242,7 +244,9 @@ public class ManagerMainClass {
             handleClientRequests(r.messages(),exceptionHandler);
             ReceiveMessageResponse finalR = r;
             executeLater(()->deleteBatchFromQueue(USER_INPUT_QUEUE_NAME, finalR.messages()),exceptionHandler);
+            return true;
         }
+        return false;
     }
 
     private static void handleClientRequests(List<Message> messages, Box<Exception> exceptionHandler){
