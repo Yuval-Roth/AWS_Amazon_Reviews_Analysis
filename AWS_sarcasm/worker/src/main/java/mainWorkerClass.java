@@ -37,6 +37,10 @@ public class mainWorkerClass {
                                   between log uploads to the S3 bucket.
                                   Must be a positive integer, must be used with -uploadLog.
                                   If this argument is not specified, defaults to 60 seconds.
+                                  
+                credentials for aws:
+                    The program will use the default aws credentials provider chain to get credentials.
+                    We recommend using environment variables to set credentials.
                 """;
     private static volatile boolean debugMode;
     private static volatile boolean uploadLogs;

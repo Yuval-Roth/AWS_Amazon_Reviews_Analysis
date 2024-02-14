@@ -68,6 +68,10 @@ public class ManagerMainClass {
                                   If this argument is not specified, defaults to 60 seconds.
                                   
                     -noEc2 :- Run without creating EC2 instances. Useful for debugging locally.
+                    
+                credentials for aws:
+                    The program will use the default aws credentials provider chain to get credentials.
+                    We recommend using environment variables to set credentials.
                 """;
     private static volatile boolean debugMode;
     private static volatile boolean noEc2;

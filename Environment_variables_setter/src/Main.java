@@ -22,8 +22,13 @@ public class Main {
 
                 // get output
                 BufferedReader stdInput = new BufferedReader(new InputStreamReader(process.getInputStream()));
+                BufferedReader stdError = new BufferedReader(new InputStreamReader(process.getErrorStream()));
                 String s;
                 StringBuilder output = new StringBuilder();
+
+                while ((s = stdError.readLine()) != null){
+                    output.append(s).append(" ----> did you run as administrator?");
+                }
                 while ((s = stdInput.readLine()) != null) {
                     output.append(s);
                 }
