@@ -254,8 +254,8 @@ public class ManagerMainClass {
                         .bucket(BUCKET_NAME)
                         .key("files/"+clientRequest.fileName()).build()).contentLength();
                 long freeMemory = Runtime.getRuntime().freeMemory();
-                int _25MB = 25 * 1024;
-                if(freeMemory - sizeOfInput < _25MB){
+                int _50MB = 50 * 1024;
+                if(freeMemory - sizeOfInput < _50MB){
                     returnMessageToQueue(USER_INPUT_QUEUE_NAME, message);
                     return;
                 }
