@@ -1,1 +1,1 @@
-[README](AWS_Amazon_Reviews_Analysis/README.PDF)
+[README](README.PDF)
