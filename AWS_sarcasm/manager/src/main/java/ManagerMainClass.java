@@ -10,7 +10,6 @@ import software.amazon.awssdk.services.sqs.model.*;
 
 import java.io.IOException;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.*;
 import java.util.concurrent.Executors;
@@ -91,7 +90,6 @@ public class ManagerMainClass {
     private static volatile Map<Integer,ClientRequest> requestCodeToClientRequest;
     private static volatile Map<Integer, Integer> jobIdToClientRequestCode;
     private static Semaphore workerCountLock;
-    private static volatile long nextClientRequestCheck;
     private static volatile long nextWorkerCountCheck;
     private static AtomicBoolean shouldTerminate;
     private static ThreadPoolExecutor executor;
@@ -211,7 +209,7 @@ public class ManagerMainClass {
                     nextLogUpload = System.currentTimeMillis() + (appendLogIntervalInSeconds * 1000L);
                 }
 
-                nextSleepTime = min(nextClientRequestCheck, nextWorkerCountCheck, nextLogUpload) - System.currentTimeMillis();
+                nextSleepTime = min(nextWorkerCountCheck, nextLogUpload) - System.currentTimeMillis();
                 if(nextSleepTime <= 0) continue;
 
                 try {
